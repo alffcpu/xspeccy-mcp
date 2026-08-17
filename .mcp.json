@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "xspeccy": {
+      "command": "./build/xspeccy-mcp"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Build and local tooling output
+build/
+.cache/
+
+# Common local files
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

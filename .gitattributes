@@ -1,0 +1,17 @@
+# Line endings are a cross-platform question here, not a style one.
+#
+# A Windows checkout with core.autocrlf=true (the default from Git for Windows)
+# rewrites every text file to CRLF. That is harmless for the C++ - the compiler
+# does not care - but tests/smoke.sh is a shell script, and a shell script with
+# CRLF fails on Linux and macOS at the first line: `set: -: invalid option`,
+# then a syntax error at the end of the file. It only bites when a tree checked
+# out on Windows is carried to a Unix host - a container, WSL, a copied
+# directory - which is exactly what happens when someone tests the other
+# platform from this one.
+#
+# So: normalise in the repository, and pin LF on checkout for the files where
+# the interpreter is the one reading them.
+* text=auto
+
+*.sh text eol=lf
+*.py text eol=lf
