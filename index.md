@@ -15,6 +15,7 @@ These pages are the longer write-up: how to set a project up, what to keep in th
 agent's notes, and how the debugging loop changes once the agent can run the
 emulator itself.
 
-## Читать / Read
+## Read / Читать
 
+- [ZX Spectrum, an AI agent, and debugging with xspeccy-mcp]({{ '/en/' | relative_url }}) - in English
 - [ZX Spectrum, ИИ-агент и отладка через xspeccy-mcp]({{ '/ru/' | relative_url }}) - по-русски

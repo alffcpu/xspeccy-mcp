@@ -2,8 +2,11 @@
 layout: page
 title: "ZX Spectrum, ИИ-агент и отладка через xspeccy-mcp"
 description: "Как использовать xspeccy-mcp, чтобы ИИ-агент сам запускал, проверял и ускорял код для ZX Spectrum."
+lang: ru
 permalink: /ru/
 ---
+
+[English version]({{ '/en/' | relative_url }})
 
 ## Небольшое предисловие
 
