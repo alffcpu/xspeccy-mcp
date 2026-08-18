@@ -16,6 +16,12 @@ As a proof of concept, a full ZX Spectrum demo was made this way:
 [CPU, DOCKS, U.](https://github.com/alffcpu/cpu-docks-u-zx-demo). All of its debugging and
 all of its builds went through this tool, and it did the job well.
 
+There is a longer write-up on working this way, in
+[English](https://alffcpu.github.io/xspeccy-mcp/en/) and in
+[Russian](https://alffcpu.github.io/xspeccy-mcp/ru/): what to keep in the agent's notes, how
+to plan the work, and how the usual edit, build, run and check loop changes once the agent can
+drive the emulator itself.
+
 An MCP server that lets AI agents run and inspect ZX Spectrum programs through the
 [Xpeccy](https://github.com/samstyle/Xpeccy) emulator core. Xpeccy is by SAM style.
 
