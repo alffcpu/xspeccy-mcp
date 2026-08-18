@@ -1,0 +1,143 @@
+---
+# Empty front matter, which is how Jekyll is told to compile this file. Placing
+# it here overrides the theme's own assets/main.scss, so the theme still loads
+# and these rules come after it.
+---
+
+@import "minima";
+
+// minima 2.5 is the version GitHub Pages ships, and it has no dark mode. Its
+// colours are Sass variables resolved when the site is built, so there is no
+// switching them in the browser; the rules below restate the few places those
+// variables end up, and only when the reader's system asks for a dark page.
+//
+// Nothing here changes the light appearance. If minima ever gains a dark skin
+// on the Pages side, this file can go away whole.
+
+:root {
+	// Tells the browser that both appearances are supported, so scrollbars and
+	// form controls follow along instead of staying stubbornly light.
+	color-scheme: light dark;
+}
+
+hr {
+	border: 0;
+	border-top: 1px solid #e8e8e8;
+}
+
+@media (prefers-color-scheme: dark) {
+	$d-bg: #16181d;
+	$d-text: #d7dae0;
+	$d-muted: #969ba5;
+	$d-line: #333941;
+	$d-link: #74a8f0;
+	$d-code-bg: #21252c;
+
+	body {
+		color: $d-text;
+		background-color: $d-bg;
+	}
+
+	a {
+		color: $d-link;
+
+		&:visited {
+			color: darken($d-link, 12%);
+		}
+
+		&:hover {
+			color: $d-text;
+		}
+	}
+
+	hr {
+		border-top-color: $d-line;
+	}
+
+	// The 5px bar across the top is an accent, and it has to stay one: at full
+	// brightness it glares, at $d-line it disappears.
+	.site-header {
+		border-top-color: lighten($d-line, 10%);
+		border-bottom-color: $d-line;
+	}
+
+	.site-title,
+	.site-title:visited {
+		color: $d-text;
+	}
+
+	// The collapsed navigation on a narrow screen draws itself as a panel.
+	.site-nav {
+		background-color: $d-bg;
+		border-color: $d-line;
+
+		.page-link {
+			color: $d-text;
+		}
+
+		.menu-icon > svg path {
+			fill: $d-muted;
+		}
+	}
+
+	.site-footer {
+		border-top-color: $d-line;
+	}
+
+	.footer-heading,
+	.footer-col-wrapper,
+	.contact-list,
+	.social-media-list,
+	.post-meta {
+		color: $d-muted;
+	}
+
+	.svg-icon {
+		fill: $d-muted;
+	}
+
+	blockquote {
+		color: $d-muted;
+		border-left-color: $d-line;
+	}
+
+	pre,
+	code {
+		background-color: $d-code-bg;
+		border-color: $d-line;
+	}
+
+	.highlight,
+	.highlighter-rouge .highlight {
+		background-color: $d-code-bg;
+	}
+
+	// Rouge's default palette is written for a white page, and its keywords are
+	// plain black, which on a dark one is simply not there. Only the tokens that
+	// actually go dark are restated.
+	.highlight {
+		.c, .c1, .cm, .cd { color: #7f858d; font-style: italic; }
+		.k, .kd, .kn, .kp, .kr, .kt, .kv { color: #c48ee0; font-weight: normal; }
+		.s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx { color: #9dd18b; }
+		.nb, .nf, .nc, .nn { color: #7fbfe0; }
+		.n, .nv, .p, .o, .ow { color: $d-text; }
+		.m, .mi, .mf, .mh, .mo { color: #e0a06a; }
+		.gh, .gu { color: $d-muted; }
+	}
+
+	table {
+		color: $d-text;
+
+		th, td {
+			border-color: $d-line;
+		}
+
+		th {
+			background-color: lighten($d-bg, 8%);
+		}
+
+		tr:nth-child(even) {
+			background-color: lighten($d-bg, 4%);
+		}
+	}
+}

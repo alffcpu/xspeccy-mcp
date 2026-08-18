@@ -2,3 +2,4 @@
 * text=auto
 *.md text eol=lf
 *.yml text eol=lf
+*.scss text eol=lf
