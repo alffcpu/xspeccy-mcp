@@ -1,0 +1,20 @@
+# GitHub Pages for xspeccy-mcp.
+#
+# This branch holds the write-up and nothing else: no sources, no build, no
+# history from main. GitHub builds the site from these files, and the code
+# repository stays clean.
+
+title: xspeccy-mcp
+description: Debugging ZX Spectrum code with an AI agent
+lang: en
+
+url: https://alffcpu.github.io
+baseurl: /xspeccy-mcp
+
+theme: minima
+
+# Every page here is linked from the front page, so the theme's navigation bar
+# has nothing to add. minima falls back to listing all pages when this list is
+# empty, so it points at a path that does not exist instead.
+header_pages:
+  - none

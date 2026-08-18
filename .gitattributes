@@ -1,0 +1,4 @@
+# The site is built on Linux; keep the sources it is built from LF.
+* text=auto
+*.md text eol=lf
+*.yml text eol=lf
