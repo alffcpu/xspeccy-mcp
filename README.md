@@ -39,6 +39,10 @@ varies between frames. `frame_digest` hashes the frame as drawn on screen, optio
 scanline; `screen_digest` hashes screen memory, which does not change if only the raster
 timing drifts, so it cannot catch that. Every stop also reports the beam position.
 
+**Point your agent at [COOKBOOK.md](COOKBOOK.md) before it starts.** The tool descriptions say
+what each call does; the cookbook says which calls to make for a given question, in what order,
+and which of them answer questions that sound the same and are not.
+
 ## Build
 
 Requirements: Python 3, CMake 3.16+, a C++17 compiler, and zlib.

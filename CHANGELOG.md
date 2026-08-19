@@ -29,7 +29,14 @@ Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a dated upstream t
 
 ## 1.2.0
 
-One rename, nothing else.
+### Added
+
+- **[COOKBOOK.md](COOKBOOK.md)**, recipes for the tools: which calls to make for a given
+  question, in what order, and which of them answer questions that sound the same and are not.
+  Worth handing to an agent before it starts, since tool descriptions say what each call does
+  and not which to reach for. It covers picking a machine and getting past a precalculation,
+  raster timing with `beam_log` and `run_to_beam`, proving a change altered neither the data
+  nor the picture, profiling, recording, coverage, disks and BASIC.
 
 ### Changed
 
