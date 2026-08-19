@@ -84,14 +84,50 @@ struct Trace {
 	std::vector<int> dump(size_t count) const;	// oldest first
 };
 
+// Where the beam was when a watched address executed.
+//
+// One entry on its own says little; the point is the spread across frames. A
+// raster routine that is correct reaches the same address at the same T-state
+// every frame, and one that is not shows up here immediately as jitter, which
+// no amount of hashing the screen memory can reveal.
+struct RasterLog {
+	struct Event {
+		int pc = 0;
+		int frame = 0;		// the video frame counter at the time
+		int t = 0;		// T-states since this frame's interrupt
+		int line = 0, dot = 0;	// beam position
+	};
+	bool on = false;
+	size_t capacity = 4096;
+	std::vector<Event> events;
+	size_t pos = 0;
+	bool wrapped = false;
+	long long total = 0;			// events seen, including overwritten ones
+	unsigned char watch[0x10000] = {0};	// 1: log execution of this address
+
+	void reset(size_t cap);
+	void clearWatch();
+	void addWatch(int adr) { watch[adr & 0xffff] = 1; }
+	bool watching(int adr) const { return watch[adr & 0xffff] != 0; }
+	void add(const Event& e);
+	std::vector<Event> dump(size_t count) const;	// oldest first
+	std::vector<int> watched() const;
+};
+
 struct RunResult {
-	std::string reason;		// steps|breakpoint|pc|frames|halt|budget
+	std::string reason;		// steps|breakpoint|pc|frames|halt|budget|beam
 	int pc = 0;
 	long long instructions = 0;
 	long long ns = 0;		// compExec() returns nanoseconds, not T-states
 	int frames = 0;
 	int brk_type = 0;		// BRK_* (libxpeccy/defines.h) when reason=breakpoint
 	int brk_addr = -1;
+	// Where the beam stood when execution stopped. Carried on every stop so
+	// that raster work does not need a second call to find out, which is half
+	// the questions asked while debugging multicolour.
+	int beam_line = -1, beam_dot = -1;
+	int beam_t = -1;		// T-states since the interrupt
+	int beam_frame = -1;
 };
 
 struct AsmLine {
@@ -140,6 +176,10 @@ public:
 	RunResult run(long long maxInstructions, int stopPc, int maxFrames);
 	RunResult runFrames(int count);
 	RunResult step(int count);
+	// Run until the beam reaches a raster position, wrapping into the next
+	// frame when the target is already behind. `dot` < 0 means "anywhere on
+	// that line". Stops on the first instruction that reached or passed it.
+	RunResult runToBeam(int line, int dot, long long maxInstructions);
 	// Both take a budget because neither has a guaranteed stop: a CALL into
 	// code that never returns, or a step_out with a stack that never unwinds,
 	// otherwise runs until the process is killed.
@@ -189,6 +229,7 @@ public:
 	Profile& profile() { return m_profile; }
 	audio::Capture& audio() { return m_audio; }
 	Trace& trace() { return m_trace; }
+	RasterLog& rasterLog() { return m_raster; }
 	const std::string& model() const { return m_model; }
 	const std::string& romset() const { return m_romset; }
 	const std::string& layout() const { return m_layout; }
@@ -199,7 +240,11 @@ private:
 	void applyPalette();
 	void applyLayout(const Layout& lay);
 	bool loadRomset(const Romset& rs, std::string& err);
-	RunResult execLoop(long long maxInstructions, int stopPc, int maxFrames, int stopSp);
+	// beamLine < 0 disables the raster stop; see runToBeam().
+	RunResult execLoop(long long maxInstructions, int stopPc, int maxFrames, int stopSp,
+			   int beamLine = -1, int beamDot = -1);
+	void stampBeam(RunResult& r) const;	// beam position into a finished result
+	void logRaster(int pc);			// one RasterLog entry for the current state
 	// profiler + trace, per instruction. `sp` is SP as it was *before* the
 	// instruction ran: compExec() has already executed it by the time we get
 	// here, and the value afterwards cannot tell a routine returning from its
@@ -222,6 +267,7 @@ private:
 	Coverage m_coverage;
 	Profile m_profile;
 	Trace m_trace;
+	RasterLog m_raster;
 	audio::Capture m_audio;
 	std::string m_model, m_romset, m_layout;
 	int m_memoryKb = 128;

@@ -25,12 +25,21 @@ drive the emulator itself.
 An MCP server that lets AI agents run and inspect ZX Spectrum programs through the
 [Xpeccy](https://github.com/samstyle/Xpeccy) emulator core. Xpeccy is by SAM style.
 
-48 tools over one machine, driven from an agent: load a snapshot, tape or disk image, run and
+51 tools over one machine, driven from an agent: load a snapshot, tape or disk image, run and
 step, set breakpoints by address or by bank, read and write memory, assemble and disassemble,
 resolve labels and listing lines from sjasmplus output, profile a frame by T-states, count
 coverage, read the screen as text or attributes or a hash, capture PNG/GIF/MP4, and inspect
 the AY and the beeper. There is no window and no real-time throttle: it runs as fast as the
 host manages, and the same program produces the same screen digest every time.
+
+Three of those are for raster code, where the question is not what the program computed but
+*when* it did. `run_to_beam` stops by position on the screen rather than by address.
+`raster_log` records where the beam was every time a watched address ran and reports the
+jitter across frames. `frame_digest` hashes the frame **as the ULA drew it**, which is a
+different question from `screen_digest` hashing screen memory: in multicolour the picture
+depends on that memory *and* on when the bank is switched relative to the beam, so timing that
+has drifted paints a different screen out of byte-identical data. Every stop also reports
+where the beam was, so raster work rarely needs a second call to find out.
 
 ## Build
 
@@ -40,9 +49,17 @@ Requirements: Python 3, CMake 3.16+, a C++17 compiler, and zlib.
 python build.py            # add --smoke to run the test suite against what it built
 ```
 
-The script downloads Xpeccy `0.6.20260804`, configures the project, and builds
-`build/xspeccy-mcp` (`build/xspeccy-mcp.exe` on Windows). Use `python3 build.py` when
-`python` is not the Python 3 command.
+The script downloads Xpeccy, configures the project, and builds `build/xspeccy-mcp`
+(`build/xspeccy-mcp.exe` on Windows). Use `python3 build.py` when `python` is not the Python 3
+command.
+
+Which Xpeccy is pinned in [`VERSIONS`](VERSIONS) — the one file any version is written down
+in, read by both `build.py` and the CMake build. It is fetched **by commit** rather than by
+tag name, because upstream also publishes tags called `stable` and `minor` and both are moving
+pointers, and what arrives is checked against a hash of `src/libxpeccy` recorded there. A tree
+supplied with `--xpeccy-src` is checked too but only warned about, since pointing at a patched
+copy is a deliberate act. `xspeccy-mcp --version` reports the server version and the emulator
+release it was built against.
 
 **On Windows use MinGW-w64, not MSVC.** The emulator core is GNU C — upstream compiles it
 with `-std=gnu99` — so Visual Studio cannot build it, and CMake will pick Visual Studio by
@@ -59,8 +76,9 @@ python build.py --generator "MinGW Makefiles"
 the PATH is optional and only needed for MP4/WebM recording — PNG and GIF are built in.
 
 Tested on Linux (Debian bookworm, GCC 12) and Windows (MSYS2 MinGW-w64, GCC 16): both build
-warning-free and pass all 99 checks, with identical screen digests. macOS is implemented but
-has not been compiled — expect small fixes on first contact.
+warning-free and pass all 110 checks, with identical screen digests and the same hash for the
+emulator sources on either platform. macOS is implemented but has not been compiled — expect
+small fixes on first contact.
 
 The included `.mcp.json` already points at the built executable, so an agent working in a
 clone of this repository finds the server without being told where it is. The path in it has

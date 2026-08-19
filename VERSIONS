@@ -1,0 +1,47 @@
+# Single source of truth for versions. Read at build time by cmake/version.cmake
+# and by build.py, so there is exactly one place to change and no way for the two
+# to drift apart. Format is KEY = VALUE; anything after a # is a comment.
+#
+# Before this file existed the pinned Xpeccy version lived in build.py and the
+# minimum the build would accept lived in cmake/xpeccy.cmake, separately, and
+# nothing compared them. A tree newer than the pin was therefore accepted in
+# silence, which is exactly the way a build stops being reproducible.
+
+# The server's own version, reported over MCP as serverInfo.version and by
+# --version. See CHANGELOG.md.
+XSPECCY_MCP_VERSION = 1.1.0
+
+# The Xpeccy release the server is built and tested against. This name is for
+# people; the pin that actually binds is XPECCY_COMMIT below.
+#
+# Use a dated tag and nothing else. Upstream also publishes tags called `stable`
+# and `minor`, and both are moving pointers - at the time of writing `stable` is
+# 3f05efa while this tag is a385440. Pinning to a name that moves is not a pin.
+XPECCY_VERSION = 0.6.20260804
+
+# What build.py actually downloads. A tag can be moved; a commit cannot, so the
+# archive fetched by this SHA is the same bytes forever.
+XPECCY_COMMIT = a385440d9c53e296f08ef98251454c2633e0d4d1
+
+# The oldest release that compiles at all, which is a different fact from the one
+# above and only happens to be the same release today. This one is fixed by the
+# source: 0.6.20260804 reshaped Computer's status bits into sysflag[], and the
+# build probes for the flgBRK marker that arrived with it. XPECCY_VERSION can
+# move forward without this following, and then the two say different things -
+# which is why the build reads both rather than repeating a number in its
+# messages.
+XPECCY_MINIMUM = 0.6.20260804
+
+# SHA-256 of the src/libxpeccy sources, which is the only part of Xpeccy we
+# compile. Not a hash of the tarball: GitHub generates those on the fly and has
+# changed their compression before, so a tarball hash goes stale without a single
+# line of source changing. This is computed over the files themselves - each
+# relative path and its contents, sorted, NUL-separated.
+#
+# Line endings are normalised to LF first, and that is not tidiness. A tree that
+# reached the disk through a Windows git checkout carries CRLF, and such a copy
+# differs from the tag's own tarball in 177 of its 195 files for that reason
+# alone while being character for character the same C. Hashing raw bytes would
+# report a corrupt dependency on every Windows machine and be ignored within a
+# week, which is worse than not checking.
+XPECCY_LIBXPECCY_SHA256 = 20b19d82e3d79091a987611fc572fcf459ceb8b94d448cbe0a957cc39a2dea9c

@@ -213,6 +213,23 @@ LBL
 	echo '{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"screen_digest","arguments":{"frames":1,"from":"$9600"}}}'
 	echo '{"jsonrpc":"2.0","id":114,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"ZX48K","boot_frames":0}}}'
 	echo '{"jsonrpc":"2.0","id":115,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"Pentagon","boot_frames":0}}}'
+	# Raster debugging. The fixture is our own border-flipping loop rather than
+	# the ROM: after a reset the ROM spends its first frames in the RAM test with
+	# interrupts off, so $0038 does not run and a log watching it stays empty for
+	# reasons that have nothing to do with the log.
+	#   $8000 di / $8001 ld a,16 / $8003 xor 16 / $8005 out (254),a
+	#   $8007 ld b,60 / $8009 djnz $8009 / $800B jr $8003
+	# $8005 therefore executes once per pass, many times a frame, forever.
+	echo '{"jsonrpc":"2.0","id":150,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","lines":["di","ld a,16","xor 16","out (254),a","ld b,60","djnz 32777","jr 32771"]}}}'
+	echo '{"jsonrpc":"2.0","id":151,"method":"tools/call","params":{"name":"set_register","arguments":{"name":"PC","value":"$8000"}}}'
+	echo '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"enable","addresses":["$8005"]}}}'
+	echo '{"jsonrpc":"2.0","id":153,"method":"tools/call","params":{"name":"run","arguments":{"max_instructions":40000}}}'
+	echo '{"jsonrpc":"2.0","id":154,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"dump","count":3}}}'
+	echo '{"jsonrpc":"2.0","id":155,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"enable"}}}'
+	echo '{"jsonrpc":"2.0","id":156,"method":"tools/call","params":{"name":"run_to_beam","arguments":{"line":100}}}'
+	echo '{"jsonrpc":"2.0","id":157,"method":"tools/call","params":{"name":"run_to_beam","arguments":{"line":99999}}}'
+	echo '{"jsonrpc":"2.0","id":158,"method":"tools/call","params":{"name":"frame_digest","arguments":{"frames":2,"lines":true}}}'
+	echo '{"jsonrpc":"2.0","id":159,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"disable"}}}'
 	# Arguments no caller means, kept last because their whole point is that the
 	# server is still there afterwards. Every one of these used to be a way to
 	# end the session: three read outside an array, two never returned, and the
@@ -333,6 +350,30 @@ check "digest range halved" 'give both from and to'
 check "beta disk present" '"interface\\": \\"Beta Disk'
 check "bad model refused" 'not usable here'
 check "server survived"   '"model\\": \\"Pentagon'
+
+# The orientation text sent with initialize. A tool description says what one
+# tool does; this is the only place the server says which to reach for, so its
+# quiet disappearance would cost an agent more than a missing tool would.
+check "initialize instructs" '"instructions":"A ZX Spectrum'
+check "instructs on digests" 'depends on screen memory AND on when the bank is switched'
+
+# Raster debugging. 40000 instructions of a 64-instruction loop is 625 passes,
+# and that number depends on the loop alone, not on anything run before it.
+check "raster log records" '"events_total\\": 625'
+check "raster log address" '"address_hex\\": \\"\$8005'
+check "raster log jitter"  '"jitter_t\\":'
+check "raster log needs addresses" 'enable needs addresses\[\]'
+# The beam only moves between instructions, so landing past the target is
+# normal - landing on a different line is not.
+check "run_to_beam lands"  '"line\\": 100,[^}]*"t_states_frame'
+check "run_to_beam exact"  '"overshoot_lines\\": 0'
+check "run_to_beam range"  'bad line: 99999 is outside 0\.\.319'
+check "stop reports beam"  '"beam\\": {'
+# Pentagon draws 320x248 with the border on; the digest is of the drawn frame,
+# so an unchanging picture repeats and says which frame it matched.
+check "frame_digest size"  '"width\\": 320,\|"height\\": 248,'
+check "frame_digest repeats" '"same_as_frame\\": 0'
+check "frame_digest lines" '"changed_lines\\":'
 
 # Bad arguments: refused by name, and the server still answers afterwards.
 check "addr above space"  'bad from: 100000 is outside the address space'

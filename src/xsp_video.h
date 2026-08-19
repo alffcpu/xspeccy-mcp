@@ -47,6 +47,26 @@ std::string screenDigest(Computer* comp, const std::vector<int>& banks,
 // digest cannot see: a table, a buffer, a sprite bank.
 std::string memoryDigest(Computer* comp, int from, int to, std::string& err);
 
+// Hash of the last completed frame as the ULA actually drew it, which is a
+// different question from screenDigest() and the reason this exists.
+//
+// screenDigest() hashes screen memory. In multicolour the picture is a function
+// of that memory AND of when the bank is switched relative to the beam, so the
+// same bytes drawn a few T-states off produce a different screen while the
+// memory hash does not move at all. A stable screenDigest() proves the data is
+// stable and says nothing whatever about the raster. This one looks at the
+// pixels that came out.
+//
+// `perLine` additionally hashes every scanline on its own, which is what turns
+// "some frames are wrong" into "line 137 onwards is wrong".
+struct FrameHash {
+	std::string digest;			// the whole (cropped) frame
+	std::vector<std::string> lines;		// per scanline, when perLine
+	int width = 0;
+	int height = 0;
+};
+FrameHash frameDigest(Computer* comp, bool border, bool perLine);
+
 } // namespace video
 
 // PNG writer (zlib, no external image library)

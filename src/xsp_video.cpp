@@ -18,25 +18,42 @@ void applyGeometry(Computer* comp) {
 	noflic = 0;
 }
 
-Shot capture(Computer* comp, bool border, int scale) {
-	Shot shot;
+// Which part of the frame buffer a capture covers. Shared so that a digest and
+// a screenshot of the same frame never disagree about what "the frame" is.
+namespace {
+
+struct Rect { int x = 0, y = 0, w = 0, h = 0; };
+
+Rect cropRect(Computer* comp, bool border) {
 	Video* vid = comp->vid;
+	Rect r;
 	const int fullW = bytesPerLine / 4;
 	const int fullH = vid->vsze.y;
-	if (fullW <= 0 || fullH <= 0) return shot;
-
-	int x0 = 0, y0 = 0, w = fullW, h = fullH;
+	if (fullW <= 0 || fullH <= 0) return r;
+	r.w = fullW;
+	r.h = fullH;
 	if (!border) {
 		// paper starts at vid->bord, and the captured image starts at vid->lcut
-		x0 = vid->bord.x - vid->lcut.x;
-		y0 = vid->bord.y - vid->lcut.y;
-		w = vid->scrn.x;
-		h = vid->scrn.y;
-		if (x0 < 0) x0 = 0;
-		if (y0 < 0) y0 = 0;
-		if (x0 + w > fullW) w = fullW - x0;
-		if (y0 + h > fullH) h = fullH - y0;
+		r.x = vid->bord.x - vid->lcut.x;
+		r.y = vid->bord.y - vid->lcut.y;
+		r.w = vid->scrn.x;
+		r.h = vid->scrn.y;
+		if (r.x < 0) r.x = 0;
+		if (r.y < 0) r.y = 0;
+		if (r.x + r.w > fullW) r.w = fullW - r.x;
+		if (r.y + r.h > fullH) r.h = fullH - r.y;
 	}
+	return r;
+}
+
+} // namespace
+
+Shot capture(Computer* comp, bool border, int scale) {
+	Shot shot;
+	const Rect rc = cropRect(comp, border);
+	const int x0 = rc.x, y0 = rc.y, w = rc.w, h = rc.h;
+	if (w <= 0 || h <= 0) return shot;
+
 	if (scale < 1) scale = 1;
 	if (scale > 8) scale = 8;
 
@@ -235,6 +252,32 @@ std::string memoryDigest(Computer* comp, int from, int to, std::string& err) {
 	for (int a = from; a <= to; a++) buf.push_back((unsigned char)memRd(comp->mem, a));
 	md.add(buf.data(), buf.size());
 	return md.hex().substr(0, 12);
+}
+
+FrameHash frameDigest(Computer* comp, bool border, bool perLine) {
+	FrameHash out;
+	const Rect rc = cropRect(comp, border);
+	if (rc.w <= 0 || rc.h <= 0) return out;
+	out.width = rc.w;
+	out.height = rc.h;
+
+	// bufimg, the same last-completed frame a screenshot returns, so a digest
+	// and the PNG next to it describe one and the same picture
+	const size_t rowBytes = (size_t)rc.w * 4;
+	Md5 whole;
+	if (perLine) out.lines.reserve((size_t)rc.h);
+	for (int y = 0; y < rc.h; y++) {
+		const unsigned char* row = bufimg + (size_t)(rc.y + y) * bytesPerLine
+					   + (size_t)rc.x * 4;
+		whole.add(row, rowBytes);
+		if (perLine) {
+			Md5 line;
+			line.add(row, rowBytes);
+			out.lines.push_back(line.hex().substr(0, 12));
+		}
+	}
+	out.digest = whole.hex().substr(0, 12);
+	return out;
 }
 
 std::string screenAttrs(Computer* comp) {

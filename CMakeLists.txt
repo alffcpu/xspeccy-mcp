@@ -8,6 +8,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(version)		# must precede xpeccy: it sets the version to check against
 include(xpeccy)
 include(builtin_rom)
 
@@ -61,7 +62,13 @@ target_include_directories(xspeccy-mcp PRIVATE
 	"${ZLIB_INCLUDE_DIRS}")
 
 target_compile_definitions(xspeccy-mcp PRIVATE
-	XSP_XPECCY_SRC="${XPECCY_SRC}")
+	XSP_XPECCY_SRC="${XPECCY_SRC}"
+	XSP_VERSION="${XSP_VERSION}"
+	# What the build actually used, which is not always what VERSIONS asks for:
+	# a tree can be handed in with -DXPECCY_SRC. Baked in so that a binary can
+	# always say what it was built against, rather than it having to be inferred.
+	XSP_XPECCY_VERSION="${XSP_XPECCY_FOUND_VERSION}"
+	XSP_XPECCY_REQUIRED="${XSP_XPECCY_REQUIRED}")
 
 target_link_libraries(xspeccy-mcp PRIVATE xpeccy_core ${XSP_ZLIB} ${CMAKE_DL_LIBS})
 

@@ -104,6 +104,67 @@ std::vector<int> Trace::dump(size_t count) const {
 	return res;
 }
 
+void RasterLog::reset(size_t cap) {
+	if (cap < 1) cap = 1;
+	if (cap > 1 << 20) cap = 1 << 20;
+	capacity = cap;
+	events.assign(cap, Event());
+	pos = 0;
+	wrapped = false;
+	total = 0;
+}
+
+void RasterLog::clearWatch() {
+	memset(watch, 0, sizeof(watch));
+}
+
+void RasterLog::add(const Event& e) {
+	if (events.empty()) reset(capacity);
+	events[pos] = e;
+	pos = (pos + 1) % events.size();
+	if (pos == 0) wrapped = true;
+	total++;
+}
+
+std::vector<RasterLog::Event> RasterLog::dump(size_t count) const {
+	std::vector<Event> res;
+	if (events.empty()) return res;
+	size_t have = wrapped ? events.size() : pos;
+	if (count > have) count = have;
+	for (size_t i = 0; i < count; i++) {
+		size_t idx = (pos + events.size() - count + i) % events.size();
+		res.push_back(events[idx]);
+	}
+	return res;
+}
+
+std::vector<int> RasterLog::watched() const {
+	std::vector<int> res;
+	for (int a = 0; a < 0x10000; a++)
+		if (watch[a]) res.push_back(a);
+	return res;
+}
+
+// The beam as it stands right now. Read before the instruction runs, so the
+// stamp is "when this instruction began" rather than where it left the beam,
+// which is the number a raster deadline is actually measured against.
+void Machine::logRaster(int pc) {
+	RasterLog::Event e;
+	e.pc = pc;
+	e.frame = m_comp->vid->fcnt;
+	e.t = m_comp->frmtCount;
+	e.line = m_comp->vid->ray.y;
+	e.dot = m_comp->vid->ray.x;
+	m_raster.add(e);
+}
+
+void Machine::stampBeam(RunResult& r) const {
+	r.beam_line = m_comp->vid->ray.y;
+	r.beam_dot = m_comp->vid->ray.x;
+	r.beam_t = m_comp->frmtCount;
+	r.beam_frame = m_comp->vid->fcnt;
+}
+
 // An instruction covers the bytes between the PC before and after it, unless it
 // jumped - then all we can honestly claim is the opcode's first byte.
 void Machine::coverPc(int pcBefore, int pcAfter) {
@@ -446,12 +507,24 @@ void Machine::reset(int mode) {
 
 // ---------------------------------------------------------------- execution
 
-RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames, int stopSp) {
+RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames, int stopSp,
+			    int beamLine, int beamDot) {
 	RunResult r;
 	Computer* c = m_comp;
 	c->flgBRK = 0;
 	const int savedDebug = c->flgDBG;
 	bool first = true;
+
+	// A raster target behind the beam means the next frame, not "stop at once",
+	// so the frame it is aimed at is settled before the loop starts rather than
+	// re-decided on every instruction.
+	bool beamArmed = false;
+	if (beamLine >= 0) {
+		const int nowLine = c->vid->ray.y, nowDot = c->vid->ray.x;
+		const bool reached = nowLine > beamLine ||
+				     (nowLine == beamLine && (beamDot < 0 || nowDot >= beamDot));
+		beamArmed = !reached;	// already past it: wait for the frame to wrap first
+	}
 
 	while (true) {
 		if (maxInstructions >= 0 && r.instructions >= maxInstructions) {
@@ -463,6 +536,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 		c->flgDBG = first ? 1 : savedDebug;
 		const int pcBefore = cpu_get_pc(c->cpu);
 		const int spBefore = cpu_get_sp(c->cpu);
+		if (m_raster.on && m_raster.watching(pcBefore)) logRaster(pcBefore);
 		const long long ns = compExec(c);
 		c->flgDBG = savedDebug;
 		first = false;
@@ -475,6 +549,8 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 			c->flgFRM = 0;
 			r.frames++;
 			if (m_profile.on) m_profile.frames++;
+			// the frame wrapped, so a target that was behind us is ahead again
+			if (beamLine >= 0) beamArmed = true;
 		}
 		if (c->flgBRK) {
 			r.reason = "breakpoint";
@@ -482,6 +558,13 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 			r.brk_addr = c->brka;
 			c->flgBRK = 0;
 			break;
+		}
+		if (beamArmed) {
+			const int line = c->vid->ray.y, dot = c->vid->ray.x;
+			if (line > beamLine || (line == beamLine && (beamDot < 0 || dot >= beamDot))) {
+				r.reason = "beam";
+				break;
+			}
 		}
 		if (maxFrames >= 0 && r.frames >= maxFrames) {
 			r.reason = "frames";
@@ -498,11 +581,18 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 		}
 	}
 	r.pc = cpu_get_pc(c->cpu);
+	stampBeam(r);
 	return r;
 }
 
 RunResult Machine::run(long long maxInstructions, int stopPc, int maxFrames) {
 	return execLoop(maxInstructions, stopPc, maxFrames, -1);
+}
+
+RunResult Machine::runToBeam(int line, int dot, long long maxInstructions) {
+	RunResult r = execLoop(maxInstructions, -1, -1, -1, line, dot);
+	if (r.reason.empty()) r.reason = "beam";
+	return r;
 }
 
 RunResult Machine::runFrames(int count) {
@@ -519,6 +609,7 @@ RunResult Machine::step(int count) {
 	for (int i = 0; i < count; i++) {
 		const int pcBefore = cpu_get_pc(c->cpu);
 		const int spBefore = cpu_get_sp(c->cpu);
+		if (m_raster.on && m_raster.watching(pcBefore)) logRaster(pcBefore);
 		const long long ns = compExec(c);
 		r.ns += ns;
 		r.instructions++;
@@ -534,6 +625,7 @@ RunResult Machine::step(int count) {
 	c->flgBRK = 0;
 	r.pc = cpu_get_pc(c->cpu);
 	r.reason = "steps";
+	stampBeam(r);
 	return r;
 }
 

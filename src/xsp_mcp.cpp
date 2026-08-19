@@ -25,8 +25,72 @@ extern "C" {
 using json = nlohmann::json;
 using xsp::Machine;
 
+// All three come from the VERSIONS file at the top of the repository by way of
+// cmake/version.cmake, so there is one place to change a version and no way for
+// the build and build.py to end up claiming different things. The fallbacks are
+// only for a compiler invoked by hand, outside the build system.
 static const char* kServerName = "xspeccy";
-static const char* kServerVersion = "0.1";
+#ifdef XSP_VERSION
+static const char* kServerVersion = XSP_VERSION;
+#else
+static const char* kServerVersion = "0.0-adhoc";
+#endif
+// The Xpeccy the binary was actually built against, and the one it was meant to
+// be. They differ when a tree was passed in with -DXPECCY_SRC, and a bug report
+// that says which is worth a great deal more than one that does not.
+#ifdef XSP_XPECCY_VERSION
+static const char* kXpeccyVersion = XSP_XPECCY_VERSION;
+#else
+static const char* kXpeccyVersion = "unknown";
+#endif
+#ifdef XSP_XPECCY_REQUIRED
+static const char* kXpeccyPinned = XSP_XPECCY_REQUIRED;
+#else
+static const char* kXpeccyPinned = "unknown";
+#endif
+
+// Sent with the initialize reply. A tool description can say what one tool does;
+// it cannot say which of fifty-one to reach for, in what order, or which pairs
+// of them answer questions that sound identical and are not. That is what this
+// is for, and the protocol has the field precisely so a server can say it once
+// instead of repeating it in every description.
+//
+// Kept short on purpose: it is prepended to the model's context for the whole
+// session, so it earns its place by covering the choices that are actually
+// costly to get wrong rather than by being complete.
+static const char* kInstructions =
+	"A ZX Spectrum (and clones) emulator driven as a tool. There is no window and no "
+	"real-time throttle: it runs as fast as the host allows, and the same program produces "
+	"the same output every time, so a measurement repeats exactly.\n"
+	"\n"
+	"Starting on a program:\n"
+	"1. machine_config picks the model (Pentagon, ZX48K, Scorpion...). Changing it resets.\n"
+	"2. load_file takes .sna/.z80/.tap/.trd. load_labels and load_listing take sjasmplus "
+	"symbol and listing files; afterwards every address argument accepts a label name, and "
+	"step_line/run_to_line/source_at work on source lines.\n"
+	"3. Most effects precalculate for seconds before drawing. Run once with "
+	"stop_pc at the main loop, then save_snapshot, and load that snapshot for every later "
+	"measurement rather than paying for the precalculation again. skip_until does the same "
+	"inside one call.\n"
+	"\n"
+	"Which tool answers which question:\n"
+	"- what is on screen: screenshot (a PNG to open and look at), screen_text, screen_attrs\n"
+	"- did my change alter the DATA: screen_digest, which hashes screen memory\n"
+	"- did my change alter the PICTURE: frame_digest, which hashes the frame as the ULA drew "
+	"it. These are different questions whenever timing matters: in multicolour the picture "
+	"depends on screen memory AND on when the bank is switched relative to the beam, so "
+	"drifted timing repaints the screen while screen_digest does not move at all.\n"
+	"- does a frame fit, and what is the headroom: frame_cost\n"
+	"- where do the T-states go: profile, and disassemble with t_states for exact counts\n"
+	"- what did the code do: set_breakpoint, step/step_over/step_out, trace, read_memory\n"
+	"- when in the frame does this code run, and is that stable across frames: raster_log\n"
+	"- put the machine at a raster position: run_to_beam\n"
+	"Every stop already reports where the beam was, so raster work rarely needs a separate "
+	"beam_position call.\n"
+	"\n"
+	"Cost: run/run_frames/step take budgets and are cheap. record_video and audio_capture "
+	"run many frames and are not; prefer a snapshot plus frame_cost or screen_digest when "
+	"measuring, and record a video to show a result rather than to find one.";
 
 // Every address argument goes through argAddr(), so they all take the same things.
 static const char* kAddrArg = "address: a number, \"$hex\"/\"0x\"/\"#hex\", or the name of a loaded label";
@@ -235,6 +299,14 @@ static json runToJson(const xsp::RunResult& r) {
 	if (r.reason == "breakpoint") {
 		j["break_type"] = r.brk_type;
 		j["break_address"] = r.brk_addr;
+	}
+	// Where the beam stood when this stopped. Raster code is debugged by asking
+	// exactly this after every stop, and carrying it here saves the second call.
+	if (r.beam_line >= 0) {
+		j["beam"] = {
+			{"line", r.beam_line}, {"dot", r.beam_dot},
+			{"t_states_frame", r.beam_t}, {"frame_counter", r.beam_frame}
+		};
 	}
 	return j;
 }
@@ -482,8 +554,41 @@ static void registerTools() {
 		     return runToJson(g_mach.runFrames(argNumRange(a, "count", 1, 1, kMaxFrames)));
 	     });
 
+	tool("run_to_beam",
+	     "Run until the video beam reaches a raster position, which is how raster code is "
+	     "stepped: by where the picture is being drawn rather than by address or instruction "
+	     "count. Give a line, and optionally a dot within it. A target already behind the beam "
+	     "means the next frame, not an immediate stop - so calling this repeatedly with the same "
+	     "line walks the same point of the raster frame after frame. Stops on the first "
+	     "instruction that reached or passed the target and reports where it actually landed, "
+	     "since the beam only moves between instructions and lands a few T-states past it.",
+	     json{{"properties", {
+		     {"line", {{"type", "integer"}, {"description", "raster line in the full frame (see beam_position)"}}},
+		     {"dot", {{"type", "integer"}, {"description", "dot within the line; omitted means anywhere on it"}}},
+		     {"max_instructions", {{"type", "integer"}, {"description", "budget, default 10000000"}}}
+	     }}, {"required", json::array({"line"})}},
+	     [](const json& a) {
+		     Video* v = g_mach.comp()->vid;
+		     const int line = argNumRange(a, "line", -1, 0, v->full.y > 0 ? v->full.y - 1 : 0xffff);
+		     if (line < 0) throw std::runtime_error("line required");
+		     const int dot = argNumRange(a, "dot", -1, 0, v->full.x > 0 ? v->full.x - 1 : 0xffff);
+		     long long budget = argNumRange(a, "max_instructions", 10000000, 1, 0x7fffffff);
+		     json j = runToJson(g_mach.runToBeam(line, dot, budget));
+		     j["target"] = {{"line", line}, {"dot", dot}};
+		     if (j.contains("beam")) {
+			     // how far past the target we actually stopped, in dots and lines
+			     const int gotLine = j["beam"]["line"].get<int>();
+			     const int gotDot = j["beam"]["dot"].get<int>();
+			     j["overshoot_lines"] = gotLine - line;
+			     if (dot >= 0 && gotLine == line) j["overshoot_dots"] = gotDot - dot;
+		     }
+		     return j;
+	     });
+
 	tool("step",
-	     "Execute N instructions, ignoring breakpoints.",
+	     "Execute N instructions, ignoring breakpoints. Use step_over instead when the next "
+	     "instruction is a CALL you do not want to walk through, and step_out to finish the "
+	     "routine you are in.",
 	     json{{"properties", {{"count", {{"type", "integer"}, {"minimum", 1}}}}}},
 	     [](const json& a) { return runToJson(g_mach.step(argNumRange(a, "count", 1, 1, 0x7fffffff))); });
 
@@ -608,7 +713,9 @@ static void registerTools() {
 	     });
 
 	tool("find_bytes",
-	     "Search the CPU address space for a hex pattern (\"3E 05 C9\"). Returns the first address or -1.",
+	     "Search the CPU address space for a hex pattern (\"3E 05 C9\"). Returns the first "
+	     "address or -1. Useful for finding an unlabelled routine by its opcodes, or for "
+	     "locating data whose address moved after a rebuild.",
 	     json{{"properties", {
 		     {"pattern", {{"type", "string"}}},
 		     {"from", {{"type", "string"}, {"description", kAddrArg}}},
@@ -807,7 +914,9 @@ static void registerTools() {
 	     [](const json&) { g_mach.clearBreaks(); return json{{"ok", true}}; });
 
 	tool("set_port_breakpoint",
-	     "Break on an I/O port access. access: read, write or both.",
+	     "Break on an I/O port access. access: read, write or both. This is how paging and "
+	     "border writes are caught without knowing where in the code they happen: $7FFD for "
+	     "the 128K pager, $FE for border and beeper.",
 	     json{{"properties", {
 		     {"port", {{"type", "string"}, {"description", "port number, or a label/EQU name"}}},
 		     {"access", {{"type", "string"}}}
@@ -1034,7 +1143,9 @@ static void registerTools() {
 	     [](const json&) { return json{{"screen", xsp::video::screenText(g_mach.comp())}}; });
 
 	tool("screen_attrs",
-	     "The 32x24 attribute grid as hex (ink/paper/bright/flash per cell).",
+	     "The 32x24 attribute grid as hex (ink/paper/bright/flash per cell). Cheaper to read "
+	     "than a screenshot when the question is about colour rather than shape, and unlike a "
+	     "PNG it can be compared in the reply itself.",
 	     json{},
 	     [](const json&) { return json{{"attributes", xsp::video::screenAttrs(g_mach.comp())}}; });
 
@@ -1125,6 +1236,107 @@ static void registerTools() {
 			     res["scope"] = scope;
 			     res["banks"] = banks;
 		     }
+		     if (!skipped.is_null()) res["skipped_to"] = skipped;
+		     if (truncated)
+			     res["warning"] = "no frame boundary within max_instructions - the digest "
+					      "list is short; check `sync`";
+		     return res;
+	     });
+
+	tool("frame_digest",
+	     "A short hash of the frame as the ULA actually drew it - the picture, not the memory "
+	     "behind it. This is the one to use for multicolour, and it answers a different question "
+	     "from screen_digest. screen_digest hashes screen memory; the visible picture is a "
+	     "function of that memory AND of when the bank is switched relative to the beam, so raster "
+	     "code whose timing has drifted paints a different screen out of byte-identical data and "
+	     "screen_digest cannot see it move. If your data hashes stable and the picture still looks "
+	     "wrong, that is not a paradox - it is this. `lines` hashes every scanline separately and "
+	     "reports which line ranges differ from the previous frame, which turns \"some frames are "
+	     "wrong\" into a line number.",
+	     json{{"properties", {
+		     {"frames", {{"type", "integer"}, {"description", "frames to run and hash, default 1"}}},
+		     {"border", {{"type", "boolean"}, {"description", "include the border, default true"}}},
+		     {"lines", {{"type", "boolean"}, {"description",
+				"also hash each scanline and report the ranges that changed"}}},
+		     {"sync", {{"type", "string"}, {"description", "halt | frame (default) | an address/label"}}},
+		     {"skip_until", {{"type", "string"}, {"description",
+				     "run to this address/label before hashing - e.g. past the precalculation"}}},
+		     {"max_instructions", {{"type", "integer"}, {"description", "per-frame budget, default 20000000"}}}
+	     }}},
+	     [](const json& a) {
+		     int frames = argNumRange(a, "frames", 1, 1, 10000);
+		     const bool border = argBool(a, "border", true);
+		     const bool perLine = argBool(a, "lines", false);
+		     json skipped = skipUntil(a);
+		     // A hardware frame by default, unlike screen_digest: the picture is
+		     // made by the ULA, and its unit is the interrupt rather than wherever
+		     // the effect happens to call its own frame boundary.
+		     SyncSpec sync = argSync(a);
+		     if (!a.is_object() || !a.contains("sync") || a["sync"].is_null()) {
+			     sync.byInterrupt = true;
+			     sync.pc = -1;
+			     sync.text = "frame";
+		     }
+		     const long long budget = argNumOr(a, "max_instructions", 20000000);
+
+		     json list = json::array();
+		     std::vector<std::string> prevLines;
+		     bool truncated = false;
+		     int width = 0, height = 0;
+		     std::map<std::string, int> seen;	// digest -> first frame that had it
+		     for (int i = 0; i < frames; i++) {
+			     if (sync.byInterrupt) {
+				     g_mach.runFrames(1);
+			     } else {
+				     xsp::FrameCost fc = g_mach.frameCost(sync.pc, budget);
+				     if (!fc.complete) truncated = true;
+			     }
+			     xsp::video::FrameHash fh =
+				     xsp::video::frameDigest(g_mach.comp(), border, perLine);
+			     if (fh.digest.empty())
+				     throw std::runtime_error("no frame buffer to hash yet - run first");
+			     width = fh.width;
+			     height = fh.height;
+			     json e{{"frame", i}, {"digest", fh.digest}};
+			     auto it = seen.find(fh.digest);
+			     if (it == seen.end()) seen.emplace(fh.digest, i);
+			     else e["same_as_frame"] = it->second;
+			     if (perLine) {
+				     // Ranges rather than 300 hashes: what is wanted is "which
+				     // part of the screen moved", and a list of line numbers is
+				     // the same answer spelled out at length.
+				     json ranges = json::array();
+				     if (!prevLines.empty()) {
+					     int run = -1;
+					     for (size_t y = 0; y < fh.lines.size(); y++) {
+						     const bool diff = y >= prevLines.size() ||
+								       fh.lines[y] != prevLines[y];
+						     if (diff && run < 0) run = (int)y;
+						     if (!diff && run >= 0) {
+							     ranges.push_back({run, (int)y - 1});
+							     run = -1;
+						     }
+					     }
+					     if (run >= 0)
+						     ranges.push_back({run, (int)fh.lines.size() - 1});
+				     }
+				     e["changed_lines"] = ranges;
+				     e["changed_line_count"] = [&]() {
+					     int n = 0;
+					     for (const auto& rg : ranges)
+						     n += rg[1].get<int>() - rg[0].get<int>() + 1;
+					     return n;
+				     }();
+				     prevLines = fh.lines;
+			     }
+			     list.push_back(e);
+			     if (truncated) break;
+		     }
+		     json res{{"sync", sync.text}, {"frames", (int)list.size()},
+			      {"scope", border ? "frame with border" : "paper only"},
+			      {"width", width}, {"height", height},
+			      {"unique_digests", (int)seen.size()},
+			      {"digests", list}};
 		     if (!skipped.is_null()) res["skipped_to"] = skipped;
 		     if (truncated)
 			     res["warning"] = "no frame boundary within max_instructions - the digest "
@@ -1242,7 +1454,9 @@ static void registerTools() {
 	     });
 
 	tool("run_to_line",
-	     "Run until a given source line in the listing is reached.",
+	     "Run until a given source line in the listing is reached. Needs load_listing first, "
+	     "and the line must be one that generated code - a comment or an equate has no address "
+	     "to stop at.",
 	     json{{"properties", {
 		     {"line", {{"type", "integer"}}},
 		     {"max_instructions", {{"type", "integer"}, {"description", "budget, default 10000000"}}}
@@ -1732,6 +1946,183 @@ static void registerTools() {
 		     return json{{"running", t.on}, {"capacity", (int)t.capacity}, {"trace", lines}};
 	     });
 
+	tool("raster_log",
+	     "Record where the beam was every time a given address executed, without stopping. This "
+	     "is the tool for raster timing: a breakpoint answers \"where is the beam this once\", and "
+	     "the question raster code actually raises is whether the answer is the same on every "
+	     "frame. Watch the entry of an interrupt handler, or the OUT that flips a bank, run a few "
+	     "dozen frames, and the spread in t_states_frame is the jitter - which is usually the "
+	     "whole diagnosis. The summary reports it per address without reading a single event: "
+	     "hits are numbered within their frame and compared position by position across frames, "
+	     "because a strip loop hits its OUT dozens of times a frame and a plain min/max over "
+	     "every hit only restates that the loop spans the frame. `jitter_shape` says whether "
+	     "every position drifts by the same amount, which is a constant offset of the whole "
+	     "pass, or by different amounts, which is drift accumulating inside it. "
+	     "action: enable, disable, clear, dump.",
+	     json{{"properties", {
+		     {"action", {{"type", "string"}, {"description", "enable | disable | clear | dump (default)"}}},
+		     {"addresses", {{"type", "array"}, {"description",
+				    "addresses or labels to watch, when enabling"},
+				    {"items", {{"type", "string"}}}}},
+		     {"count", {{"type", "integer"}, {"description", "events to dump, default 64"}}},
+		     {"summary", {{"type", "boolean"}, {"description",
+				  "per-address jitter across frames, default true"}}},
+		     {"by_position", {{"type", "boolean"}, {"description",
+				      "add the per-position breakdown; off by default because a "
+				      "48-strip loop makes 48 entries and jitter_shape already "
+				      "says whether they agree"}}},
+		     {"size", {{"type", "integer"}, {"description", "ring size when enabling, default 4096"}}}
+	     }}},
+	     [](const json& a) {
+		     auto& rl = g_mach.rasterLog();
+		     const std::string action = argStr(a, "action", "dump");
+		     if (action == "enable") {
+			     if (!a.contains("addresses") || !a["addresses"].is_array() ||
+				 a["addresses"].empty())
+				     throw std::runtime_error("enable needs addresses[]");
+			     rl.reset((size_t)argNumRange(a, "size", 4096, 1, 1 << 20));
+			     rl.clearWatch();
+			     for (const auto& item : a["addresses"]) {
+				     int adr = 0;
+				     json one = json::object();
+				     one["a"] = item;
+				     if (!argAddr(one, "a", adr))
+					     throw std::runtime_error("bad address: " + item.dump());
+				     if (adr < 0 || adr > 0xffff)
+					     throw std::runtime_error("address outside $0000..$FFFF: " +
+								      item.dump());
+				     rl.addWatch(adr);
+			     }
+			     rl.on = true;
+		     } else if (action == "disable") {
+			     rl.on = false;
+		     } else if (action == "clear") {
+			     rl.reset(rl.capacity);
+		     } else if (action != "dump") {
+			     throw std::runtime_error("action must be enable, disable, clear or dump");
+		     }
+
+		     json watched = json::array();
+		     for (int adr : rl.watched()) {
+			     json w{{"address", adr}, {"address_hex", hex16(adr)}};
+			     if (const std::string* lab = g_mach.labels().atAddress(adr))
+				     w["label"] = *lab;
+			     watched.push_back(w);
+		     }
+		     json res{{"running", rl.on}, {"capacity", (int)rl.capacity},
+			      {"events_total", rl.total}, {"watching", watched}};
+
+		     if (action == "dump") {
+			     std::vector<xsp::RasterLog::Event> evs =
+				     rl.dump((size_t)argNumRange(a, "count", 64, 1, 1 << 20));
+			     json list = json::array();
+			     for (const auto& e : evs)
+				     list.push_back({{"address", e.pc}, {"address_hex", hex16(e.pc)},
+						     {"frame_counter", e.frame},
+						     {"t_states_frame", e.t},
+						     {"line", e.line}, {"dot", e.dot}});
+			     res["events"] = list;
+			     if (argBool(a, "summary", true)) {
+				     // Over the whole ring, not just the dumped tail: the spread
+				     // is the answer here and it should not depend on `count`.
+				     //
+				     // Raster code runs the same address many times per frame -
+				     // a multicolour strip loop hits its OUT once per band - so
+				     // the min and max over every hit merely restate that the
+				     // loop spans the frame. Jitter is the Nth hit of one frame
+				     // against the Nth hit of the next, and that is what is
+				     // measured here: hits are numbered within their frame and
+				     // compared across frames position by position.
+				     std::vector<xsp::RasterLog::Event> all = rl.dump(rl.capacity);
+				     // The ring usually begins mid-frame, and that frame is
+				     // missing its early hits, which would fake a huge spread on
+				     // every position. Start at the first frame boundary we saw.
+				     size_t begin = 0;
+				     if (!all.empty()) {
+					     const int f0 = all[0].frame;
+					     while (begin < all.size() && all[begin].frame == f0) begin++;
+				     }
+				     struct Occ { int lo, hi; long long n; };
+				     std::map<std::pair<int, int>, Occ> byOcc;	// (pc, nth in frame)
+				     std::map<int, long long> hits;
+				     std::map<int, std::map<int, int>> perFrame;	// pc -> frame -> count
+				     std::map<int, int> nth;
+				     int curFrame = begin < all.size() ? all[begin].frame : 0;
+				     for (size_t i = begin; i < all.size(); i++) {
+					     const auto& e = all[i];
+					     if (e.frame != curFrame) { curFrame = e.frame; nth.clear(); }
+					     const int k = nth[e.pc]++;
+					     hits[e.pc]++;
+					     perFrame[e.pc][e.frame]++;
+					     auto key = std::make_pair(e.pc, k);
+					     auto it = byOcc.find(key);
+					     if (it == byOcc.end()) byOcc.emplace(key, Occ{e.t, e.t, 1});
+					     else {
+						     Occ& o = it->second;
+						     if (e.t < o.lo) o.lo = e.t;
+						     if (e.t > o.hi) o.hi = e.t;
+						     o.n++;
+					     }
+				     }
+				     const bool wantPos = argBool(a, "by_position", false);
+				     json sum = json::array();
+				     for (const auto& kv : hits) {
+					     const int pc = kv.first;
+					     int worst = 0, worstAt = -1, positions = 0, best = -1;
+					     json byPos = json::array();
+					     for (const auto& oc : byOcc) {
+						     if (oc.first.first != pc) continue;
+						     positions++;
+						     const int spread = oc.second.hi - oc.second.lo;
+						     if (spread > worst) { worst = spread; worstAt = oc.first.second; }
+						     if (best < 0 || spread < best) best = spread;
+						     if (wantPos && byPos.size() < 512)
+							     byPos.push_back({{"nth_in_frame", oc.first.second},
+									      {"frames", oc.second.n},
+									      {"t_min", oc.second.lo},
+									      {"t_max", oc.second.hi},
+									      {"jitter_t", spread}});
+					     }
+					     int pfLo = -1, pfHi = -1;
+					     for (const auto& f : perFrame[pc]) {
+						     if (pfLo < 0 || f.second < pfLo) pfLo = f.second;
+						     if (f.second > pfHi) pfHi = f.second;
+					     }
+					     // Whether the jitter is the same on every position or
+					     // grows along them is the whole difference between a
+					     // constant offset of the pass and drift accumulating
+					     // inside it. That is two numbers, not one entry per
+					     // position, and a 48-strip loop has 48 of those.
+					     json s{{"address", pc}, {"address_hex", hex16(pc)},
+						    {"hits", kv.second},
+						    {"frames", (long long)perFrame[pc].size()},
+						    {"hits_per_frame_min", pfLo},
+						    {"hits_per_frame_max", pfHi},
+						    {"jitter_t", worst},
+						    {"jitter_t_least", best < 0 ? 0 : best},
+						    {"jitter_worst_nth_in_frame", worstAt},
+						    {"positions_per_frame", positions},
+						    {"jitter_shape", positions < 2 ? "single"
+								    : (best == worst ? "uniform" : "varies")}};
+					     if (wantPos) s["by_position"] = byPos;
+					     if (pfLo != pfHi)
+						     s["warning"] = "the number of hits per frame is not "
+								    "constant, so positions do not line up "
+								    "between frames and jitter_t is unreliable";
+					     if (const std::string* lab = g_mach.labels().atAddress(pc))
+						     s["label"] = *lab;
+					     sum.push_back(s);
+				     }
+				     res["summary"] = sum;
+				     if (begin >= all.size() && !all.empty())
+					     res["summary_note"] = "every event in the ring belongs to one "
+								   "frame; run more frames, or raise `size`, "
+								   "to compare frames against each other";
+			     }
+		     }
+		     return res;
+	     });
+
 	// -------------------------------------------------- sound
 
 	tool("ay_state",
@@ -2115,7 +2506,9 @@ static void registerTools() {
 	     });
 
 	tool("save_snapshot",
-	     "Save the current machine state to a .sna file.",
+	     "Save the current machine state to a .sna file. The standard way to skip a long "
+	     "precalculation: run once to the main loop, save here, and load that snapshot for "
+	     "every later measurement instead of paying for the precalculation each time.",
 	     json{{"properties", {{"path", {{"type", "string"}}}}}, {"required", json::array({"path"})}},
 	     [](const json& a) {
 		     std::string path = argStr(a, "path");
@@ -2164,7 +2557,8 @@ static void handle(const json& req) {
 		reply(id, json{
 			{"protocolVersion", proto},
 			{"capabilities", {{"tools", json::object()}}},
-			{"serverInfo", {{"name", kServerName}, {"version", kServerVersion}}}
+			{"serverInfo", {{"name", kServerName}, {"version", kServerVersion}}},
+			{"instructions", kInstructions}
 		});
 		return;
 	}
@@ -2206,6 +2600,10 @@ int main(int argc, char** argv) {
 		std::string a = argv[i];
 		if (a == "--version") {
 			printf("%s %s\n", kServerName, kServerVersion);
+			printf("Xpeccy %s", kXpeccyVersion);
+			if (strcmp(kXpeccyVersion, kXpeccyPinned) != 0)
+				printf(" (pinned: %s - this build does not match it)", kXpeccyPinned);
+			printf("\n");
 			return 0;
 		}
 		if (a == "--help") {
@@ -2235,6 +2633,8 @@ int main(int argc, char** argv) {
 	g_mach.runFrames(100);			// reach the prompt before the first request
 
 	registerTools();
+	fprintf(stderr, "xspeccy-mcp: %s, Xpeccy %s%s\n", kServerVersion, kXpeccyVersion,
+		strcmp(kXpeccyVersion, kXpeccyPinned) == 0 ? "" : " (NOT the pinned release)");
 	fprintf(stderr, "xspeccy-mcp: %zu tools ready\n", g_tools.size());
 
 	std::ios::sync_with_stdio(false);
