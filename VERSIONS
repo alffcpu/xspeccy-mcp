@@ -9,7 +9,7 @@
 
 # The server's own version, reported over MCP as serverInfo.version and by
 # --version. See CHANGELOG.md.
-XSPECCY_MCP_VERSION = 1.1.0
+XSPECCY_MCP_VERSION = 1.2.0
 
 # The Xpeccy release the server is built and tested against. This name is for
 # people; the pin that actually binds is XPECCY_COMMIT below.

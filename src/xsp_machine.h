@@ -90,7 +90,7 @@ struct Trace {
 // raster routine that is correct reaches the same address at the same T-state
 // every frame, and one that is not shows up here immediately as jitter, which
 // no amount of hashing the screen memory can reveal.
-struct RasterLog {
+struct BeamLog {
 	struct Event {
 		int pc = 0;
 		int frame = 0;		// the video frame counter at the time
@@ -229,7 +229,7 @@ public:
 	Profile& profile() { return m_profile; }
 	audio::Capture& audio() { return m_audio; }
 	Trace& trace() { return m_trace; }
-	RasterLog& rasterLog() { return m_raster; }
+	BeamLog& beamLog() { return m_beamLog; }
 	const std::string& model() const { return m_model; }
 	const std::string& romset() const { return m_romset; }
 	const std::string& layout() const { return m_layout; }
@@ -244,7 +244,7 @@ private:
 	RunResult execLoop(long long maxInstructions, int stopPc, int maxFrames, int stopSp,
 			   int beamLine = -1, int beamDot = -1);
 	void stampBeam(RunResult& r) const;	// beam position into a finished result
-	void logRaster(int pc);			// one RasterLog entry for the current state
+	void logBeam(int pc);			// one BeamLog entry for the current state
 	// profiler + trace, per instruction. `sp` is SP as it was *before* the
 	// instruction ran: compExec() has already executed it by the time we get
 	// here, and the value afterwards cannot tell a routine returning from its
@@ -267,7 +267,7 @@ private:
 	Coverage m_coverage;
 	Profile m_profile;
 	Trace m_trace;
-	RasterLog m_raster;
+	BeamLog m_beamLog;
 	audio::Capture m_audio;
 	std::string m_model, m_romset, m_layout;
 	int m_memoryKb = 128;

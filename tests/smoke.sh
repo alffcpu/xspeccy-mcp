@@ -222,14 +222,14 @@ LBL
 	# $8005 therefore executes once per pass, many times a frame, forever.
 	echo '{"jsonrpc":"2.0","id":150,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","lines":["di","ld a,16","xor 16","out (254),a","ld b,60","djnz 32777","jr 32771"]}}}'
 	echo '{"jsonrpc":"2.0","id":151,"method":"tools/call","params":{"name":"set_register","arguments":{"name":"PC","value":"$8000"}}}'
-	echo '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"enable","addresses":["$8005"]}}}'
+	echo '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"enable","addresses":["$8005"]}}}'
 	echo '{"jsonrpc":"2.0","id":153,"method":"tools/call","params":{"name":"run","arguments":{"max_instructions":40000}}}'
-	echo '{"jsonrpc":"2.0","id":154,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"dump","count":3}}}'
-	echo '{"jsonrpc":"2.0","id":155,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"enable"}}}'
+	echo '{"jsonrpc":"2.0","id":154,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"dump","count":3}}}'
+	echo '{"jsonrpc":"2.0","id":155,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"enable"}}}'
 	echo '{"jsonrpc":"2.0","id":156,"method":"tools/call","params":{"name":"run_to_beam","arguments":{"line":100}}}'
 	echo '{"jsonrpc":"2.0","id":157,"method":"tools/call","params":{"name":"run_to_beam","arguments":{"line":99999}}}'
 	echo '{"jsonrpc":"2.0","id":158,"method":"tools/call","params":{"name":"frame_digest","arguments":{"frames":2,"lines":true}}}'
-	echo '{"jsonrpc":"2.0","id":159,"method":"tools/call","params":{"name":"raster_log","arguments":{"action":"disable"}}}'
+	echo '{"jsonrpc":"2.0","id":159,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"disable"}}}'
 	# Arguments no caller means, kept last because their whole point is that the
 	# server is still there afterwards. Every one of these used to be a way to
 	# end the session: three read outside an array, two never returned, and the
@@ -359,10 +359,10 @@ check "instructs on digests" 'depends on screen memory AND on when the bank is s
 
 # Raster debugging. 40000 instructions of a 64-instruction loop is 625 passes,
 # and that number depends on the loop alone, not on anything run before it.
-check "raster log records" '"events_total\\": 625'
-check "raster log address" '"address_hex\\": \\"\$8005'
-check "raster log jitter"  '"jitter_t\\":'
-check "raster log needs addresses" 'enable needs addresses\[\]'
+check "beam log records" '"events_total\\": 625'
+check "beam log address" '"address_hex\\": \\"\$8005'
+check "beam log jitter"  '"jitter_t\\":'
+check "beam log needs addresses" 'enable needs addresses\[\]'
 # The beam only moves between instructions, so landing past the target is
 # normal - landing on a different line is not.
 check "run_to_beam lands"  '"line\\": 100,[^}]*"t_states_frame'

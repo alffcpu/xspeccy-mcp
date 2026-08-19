@@ -83,7 +83,7 @@ static const char* kInstructions =
 	"- does a frame fit, and what is the headroom: frame_cost\n"
 	"- where do the T-states go: profile, and disassemble with t_states for exact counts\n"
 	"- what did the code do: set_breakpoint, step/step_over/step_out, trace, read_memory\n"
-	"- when in the frame does this code run, and is that stable across frames: raster_log\n"
+	"- when in the frame does this code run, and is that stable across frames: beam_log\n"
 	"- put the machine at a raster position: run_to_beam\n"
 	"Every stop already reports where the beam was, so raster work rarely needs a separate "
 	"beam_position call.\n"
@@ -1946,7 +1946,7 @@ static void registerTools() {
 		     return json{{"running", t.on}, {"capacity", (int)t.capacity}, {"trace", lines}};
 	     });
 
-	tool("raster_log",
+	tool("beam_log",
 	     "Record where the beam was every time a given address executed, without stopping. This "
 	     "is the tool for raster timing: a breakpoint answers \"where is the beam this once\", and "
 	     "the question raster code actually raises is whether the answer is the same on every "
@@ -1974,7 +1974,7 @@ static void registerTools() {
 		     {"size", {{"type", "integer"}, {"description", "ring size when enabling, default 4096"}}}
 	     }}},
 	     [](const json& a) {
-		     auto& rl = g_mach.rasterLog();
+		     auto& rl = g_mach.beamLog();
 		     const std::string action = argStr(a, "action", "dump");
 		     if (action == "enable") {
 			     if (!a.contains("addresses") || !a["addresses"].is_array() ||
@@ -2013,7 +2013,7 @@ static void registerTools() {
 			      {"events_total", rl.total}, {"watching", watched}};
 
 		     if (action == "dump") {
-			     std::vector<xsp::RasterLog::Event> evs =
+			     std::vector<xsp::BeamLog::Event> evs =
 				     rl.dump((size_t)argNumRange(a, "count", 64, 1, 1 << 20));
 			     json list = json::array();
 			     for (const auto& e : evs)
@@ -2033,7 +2033,7 @@ static void registerTools() {
 				     // against the Nth hit of the next, and that is what is
 				     // measured here: hits are numbered within their frame and
 				     // compared across frames position by position.
-				     std::vector<xsp::RasterLog::Event> all = rl.dump(rl.capacity);
+				     std::vector<xsp::BeamLog::Event> all = rl.dump(rl.capacity);
 				     // The ring usually begins mid-frame, and that frame is
 				     // missing its early hits, which would fake a huge spread on
 				     // every position. Start at the first frame boundary we saw.

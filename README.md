@@ -32,14 +32,12 @@ coverage, read the screen as text or attributes or a hash, capture PNG/GIF/MP4, 
 the AY and the beeper. There is no window and no real-time throttle: it runs as fast as the
 host manages, and the same program produces the same screen digest every time.
 
-Three of those are for raster code, where the question is not what the program computed but
-*when* it did. `run_to_beam` stops by position on the screen rather than by address.
-`raster_log` records where the beam was every time a watched address ran and reports the
-jitter across frames. `frame_digest` hashes the frame **as the ULA drew it**, which is a
-different question from `screen_digest` hashing screen memory: in multicolour the picture
-depends on that memory *and* on when the bank is switched relative to the beam, so timing that
-has drifted paints a different screen out of byte-identical data. Every stop also reports
-where the beam was, so raster work rarely needs a second call to find out.
+Three of those are for raster and multicolour code. `run_to_beam` runs until the beam reaches
+a given line and dot, instead of stopping at an address. `beam_log` logs the beam position
+every time a given address is executed, without stopping the machine, and reports how much it
+varies between frames. `frame_digest` hashes the frame as drawn on screen, optionally per
+scanline; `screen_digest` hashes screen memory, which does not change if only the raster
+timing drifts, so it cannot catch that. Every stop also reports the beam position.
 
 ## Build
 
@@ -53,7 +51,7 @@ The script downloads Xpeccy, configures the project, and builds `build/xspeccy-m
 (`build/xspeccy-mcp.exe` on Windows). Use `python3 build.py` when `python` is not the Python 3
 command.
 
-Which Xpeccy is pinned in [`VERSIONS`](VERSIONS) — the one file any version is written down
+Which Xpeccy is pinned in [`VERSIONS`](VERSIONS) - the one file any version is written down
 in, read by both `build.py` and the CMake build. It is fetched **by commit** rather than by
 tag name, because upstream also publishes tags called `stable` and `minor` and both are moving
 pointers, and what arrives is checked against a hash of `src/libxpeccy` recorded there. A tree
@@ -61,8 +59,8 @@ supplied with `--xpeccy-src` is checked too but only warned about, since pointin
 copy is a deliberate act. `xspeccy-mcp --version` reports the server version and the emulator
 release it was built against.
 
-**On Windows use MinGW-w64, not MSVC.** The emulator core is GNU C — upstream compiles it
-with `-std=gnu99` — so Visual Studio cannot build it, and CMake will pick Visual Studio by
+**On Windows use MinGW-w64, not MSVC.** The emulator core is GNU C - upstream compiles it
+with `-std=gnu99` - so Visual Studio cannot build it, and CMake will pick Visual Studio by
 default if it is installed. The short way to a toolchain is MSYS2:
 
 ```sh
@@ -73,11 +71,11 @@ python build.py --generator "MinGW Makefiles"
 ```
 
 `--smoke` needs a `bash`; on Windows either the MSYS2 one or Git Bash will do. `ffmpeg` on
-the PATH is optional and only needed for MP4/WebM recording — PNG and GIF are built in.
+the PATH is optional and only needed for MP4/WebM recording - PNG and GIF are built in.
 
 Tested on Linux (Debian bookworm, GCC 12) and Windows (MSYS2 MinGW-w64, GCC 16): both build
-warning-free and pass all 110 checks, with identical screen digests and the same hash for the
-emulator sources on either platform. macOS is implemented but has not been compiled — expect
+warning-free and pass all 112 checks, with identical screen digests and the same hash for the
+emulator sources on either platform. macOS is implemented but has not been compiled - expect
 small fixes on first contact.
 
 The included `.mcp.json` already points at the built executable, so an agent working in a
@@ -88,7 +86,7 @@ For another MCP client, use `build/xspeccy-mcp` as the server command. It speaks
 over stdio, one message per line.
 
 The server reads the emulator's own configuration when it can find one, so "give me a
-Pentagon" produces the machine Xpeccy's GUI would boot — same romset, same RAM, same screen
+Pentagon" produces the machine Xpeccy's GUI would boot - same romset, same RAM, same screen
 geometry. Point it at that directory with `--config <dir>` (on Windows the configuration
 lives next to `xpeccy.exe`). Without one it boots a Pentagon 128K from a ROM compiled into
 the binary, so it works on a machine that has never seen Xpeccy.

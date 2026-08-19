@@ -104,7 +104,7 @@ std::vector<int> Trace::dump(size_t count) const {
 	return res;
 }
 
-void RasterLog::reset(size_t cap) {
+void BeamLog::reset(size_t cap) {
 	if (cap < 1) cap = 1;
 	if (cap > 1 << 20) cap = 1 << 20;
 	capacity = cap;
@@ -114,11 +114,11 @@ void RasterLog::reset(size_t cap) {
 	total = 0;
 }
 
-void RasterLog::clearWatch() {
+void BeamLog::clearWatch() {
 	memset(watch, 0, sizeof(watch));
 }
 
-void RasterLog::add(const Event& e) {
+void BeamLog::add(const Event& e) {
 	if (events.empty()) reset(capacity);
 	events[pos] = e;
 	pos = (pos + 1) % events.size();
@@ -126,7 +126,7 @@ void RasterLog::add(const Event& e) {
 	total++;
 }
 
-std::vector<RasterLog::Event> RasterLog::dump(size_t count) const {
+std::vector<BeamLog::Event> BeamLog::dump(size_t count) const {
 	std::vector<Event> res;
 	if (events.empty()) return res;
 	size_t have = wrapped ? events.size() : pos;
@@ -138,7 +138,7 @@ std::vector<RasterLog::Event> RasterLog::dump(size_t count) const {
 	return res;
 }
 
-std::vector<int> RasterLog::watched() const {
+std::vector<int> BeamLog::watched() const {
 	std::vector<int> res;
 	for (int a = 0; a < 0x10000; a++)
 		if (watch[a]) res.push_back(a);
@@ -148,14 +148,14 @@ std::vector<int> RasterLog::watched() const {
 // The beam as it stands right now. Read before the instruction runs, so the
 // stamp is "when this instruction began" rather than where it left the beam,
 // which is the number a raster deadline is actually measured against.
-void Machine::logRaster(int pc) {
-	RasterLog::Event e;
+void Machine::logBeam(int pc) {
+	BeamLog::Event e;
 	e.pc = pc;
 	e.frame = m_comp->vid->fcnt;
 	e.t = m_comp->frmtCount;
 	e.line = m_comp->vid->ray.y;
 	e.dot = m_comp->vid->ray.x;
-	m_raster.add(e);
+	m_beamLog.add(e);
 }
 
 void Machine::stampBeam(RunResult& r) const {
@@ -536,7 +536,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 		c->flgDBG = first ? 1 : savedDebug;
 		const int pcBefore = cpu_get_pc(c->cpu);
 		const int spBefore = cpu_get_sp(c->cpu);
-		if (m_raster.on && m_raster.watching(pcBefore)) logRaster(pcBefore);
+		if (m_beamLog.on && m_beamLog.watching(pcBefore)) logBeam(pcBefore);
 		const long long ns = compExec(c);
 		c->flgDBG = savedDebug;
 		first = false;
@@ -609,7 +609,7 @@ RunResult Machine::step(int count) {
 	for (int i = 0; i < count; i++) {
 		const int pcBefore = cpu_get_pc(c->cpu);
 		const int spBefore = cpu_get_sp(c->cpu);
-		if (m_raster.on && m_raster.watching(pcBefore)) logRaster(pcBefore);
+		if (m_beamLog.on && m_beamLog.watching(pcBefore)) logBeam(pcBefore);
 		const long long ns = compExec(c);
 		r.ns += ns;
 		r.instructions++;
