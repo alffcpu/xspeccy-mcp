@@ -4,13 +4,38 @@
 set -u
 
 BIN="${1:-$(dirname "$0")/../build/xspeccy-mcp}"
+# One directory, and every working file named inside it. The obvious spelling
+# is `mktemp --suffix=.png`, and it is a GNU extension: BSD mktemp, which is the
+# one macOS ships, answers `unrecognized option` and prints nothing. The variable
+# is then empty, every path built from it is the directory itself, and the suite
+# fails seventeen checks in a row for a reason that has nothing to do with the
+# server. Naming files inside one directory needs no extension anywhere.
 OUT=$(mktemp)
-SHOT=$(mktemp -u --suffix=.png)
-WAV=$(mktemp -u --suffix=.wav)
-GIF=$(mktemp -u --suffix=.gif)
-LABELS=$(mktemp --suffix=.labels)
-LST=$(mktemp --suffix=.lst)
-TAP=$(mktemp --suffix=.tap)
+TMPD=$(mktemp -d)
+SHOT="$TMPD/shot.png"
+WAV="$TMPD/capture.wav"
+GIF="$TMPD/capture.gif"
+MIX="$TMPD/blended.png"
+LABELS="$TMPD/symbols.labels"
+LST="$TMPD/source.lst"
+TAP="$TMPD/tape.tap"
+ERR="$TMPD/stderr.txt"
+
+# The emulator reads Xpeccy's own configuration when it finds one, which is the
+# right behaviour for a user and the wrong one for a test: the expected values
+# below were measured against the built-in defaults, so on a machine that has
+# Xpeccy installed the romset and the screen geometry are somebody else's and
+# three checks fail. An empty directory is a configuration that exists and says
+# nothing, which pins the defaults without disabling the code path.
+CFG="$TMPD/xpeccy-config"
+mkdir -p "$CFG"
+# Passed through native() like every other path the server is handed. This one
+# is an argv rather than a string inside JSON, and MSYS2 usually converts those
+# on the way through, but "usually" is not a thing to rely on when the failure
+# is the server quietly reading a different directory.
+
+# `stat -c%s` is GNU and `stat -f%z` is BSD. wc is neither.
+filesize() { wc -c < "$1" | tr -d ' '; }
 
 # Every path below travels inside a JSON string, so the shell never sees it again
 # and cannot translate it. On Windows the server is a native program: the /tmp/x
@@ -21,7 +46,7 @@ if command -v cygpath >/dev/null 2>&1; then
 else
 	native() { printf '%s' "$1"; }
 fi
-SHOT_N=$(native "$SHOT"); WAV_N=$(native "$WAV"); GIF_N=$(native "$GIF")
+SHOT_N=$(native "$SHOT"); WAV_N=$(native "$WAV"); GIF_N=$(native "$GIF"); MIX_N=$(native "$MIX")
 LABELS_N=$(native "$LABELS"); LST_N=$(native "$LST"); TAP_N=$(native "$TAP")
 
 # One-block .tap: a 19-byte standard header, length word first. It exists so the
@@ -230,6 +255,43 @@ LBL
 	echo '{"jsonrpc":"2.0","id":157,"method":"tools/call","params":{"name":"run_to_beam","arguments":{"line":99999}}}'
 	echo '{"jsonrpc":"2.0","id":158,"method":"tools/call","params":{"name":"frame_digest","arguments":{"frames":2,"lines":true}}}'
 	echo '{"jsonrpc":"2.0","id":159,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"disable"}}}'
+	# A flicker to blend: every interrupt the attributes go from paper black to
+	# paper bright white and back, which is a gigascreen with one colour in it.
+	# A raw frame is one of the two and looks like neither; the blend of the two
+	# is the grey a person watching the screen sees.
+	echo '{"jsonrpc":"2.0","id":160,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","text":"di\nim 1\nld hl,$4000\nld de,$4001\nld bc,6143\nld (hl),0\nldir\nxor a\nld ($9000),a\nei\nflick:\nld a,($9000)\nxor $78\nld ($9000),a\nld hl,$5800\nld de,$5801\nld bc,767\nld (hl),a\nldir\nhalt\njr flick"}}}'
+	echo '{"jsonrpc":"2.0","id":161,"method":"tools/call","params":{"name":"set_register","arguments":{"name":"PC","value":"$8000"}}}'
+	echo '{"jsonrpc":"2.0","id":162,"method":"tools/call","params":{"name":"run_frames","arguments":{"count":20}}}'
+	echo "{\"jsonrpc\":\"2.0\",\"id\":163,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"border\":false,\"blend\":2,\"path\":\"$MIX_N\"}}}"
+	# The mix itself, pinned. Black and white averaged in linear light is #B6B6B6
+	# at gamma 2.2 - averaging the bytes instead would give #808080, and the whole
+	# point of the blend is that it does not. A changed digest here means the
+	# colour changed, which is a decision, not a detail.
+	echo '{"jsonrpc":"2.0","id":164,"method":"tools/call","params":{"name":"frame_digest","arguments":{"frames":1,"border":false,"blend":2}}}'
+	echo '{"jsonrpc":"2.0","id":165,"method":"tools/call","params":{"name":"video_config","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":166,"method":"tools/call","params":{"name":"video_config","arguments":{"blend":99}}}'
+	# Settings: one table drives the report, the setter and the file, so the
+	# checks below are on all three faces of the same row.
+	echo '{"jsonrpc":"2.0","id":170,"method":"tools/call","params":{"name":"settings","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":171,"method":"tools/call","params":{"name":"settings","arguments":{"action":"set","name":"timing.contPattern","value":"b"}}}'
+	echo '{"jsonrpc":"2.0","id":172,"method":"tools/call","params":{"name":"settings","arguments":{"action":"set","name":"video.gamma","value":9}}}'
+	echo '{"jsonrpc":"2.0","id":173,"method":"tools/call","params":{"name":"settings","arguments":{"action":"set","name":"timing.contPattern","value":"purple"}}}'
+	echo '{"jsonrpc":"2.0","id":174,"method":"tools/call","params":{"name":"settings","arguments":{"action":"set","name":"nope.nothing","value":1}}}'
+	echo '{"jsonrpc":"2.0","id":175,"method":"tools/call","params":{"name":"settings","arguments":{"action":"reset","name":"timing.contPattern"}}}'
+	echo '{"jsonrpc":"2.0","id":176,"method":"tools/call","params":{"name":"settings","arguments":{"action":"nonsense","name":"video.gamma"}}}'
+	# Which screen page is on air. The program below writes a different attribute
+	# byte into each of the two screens and then puts bank 7 on air with bit 3 of
+	# $7FFD. Reading through the CPU's view would answer $38 here - bank 5 is the
+	# one mapped at $4000 whatever the ULA is doing - so $28 is the whole point:
+	# it is the screen a person is actually looking at.
+	echo '{"jsonrpc":"2.0","id":180,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","text":"di\nld bc,$7ffd\nld a,7\nout (c),a\nld hl,$d800\nld de,$d801\nld bc,767\nld (hl),$28\nldir\nld hl,$5800\nld de,$5801\nld bc,767\nld (hl),$38\nldir\nld bc,$7ffd\nld a,$0f\nout (c),a\nspin:\njr spin"}}}'
+	echo '{"jsonrpc":"2.0","id":181,"method":"tools/call","params":{"name":"set_register","arguments":{"name":"PC","value":"$8000"}}}'
+	echo '{"jsonrpc":"2.0","id":182,"method":"tools/call","params":{"name":"run_frames","arguments":{"count":3}}}'
+	echo '{"jsonrpc":"2.0","id":183,"method":"tools/call","params":{"name":"beam_position","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":184,"method":"tools/call","params":{"name":"screen_attrs","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":185,"method":"tools/call","params":{"name":"screen_attrs","arguments":{"page":5}}}'
+	echo '{"jsonrpc":"2.0","id":186,"method":"tools/call","params":{"name":"screen_attrs","arguments":{"page":999}}}'
+
 	# Arguments no caller means, kept last because their whole point is that the
 	# server is still there afterwards. Every one of these used to be a way to
 	# end the session: three read outside an array, two never returned, and the
@@ -248,7 +310,7 @@ LBL
 	echo '{"jsonrpc":"2.0","id":141,"method":"tools/call","params":{"name":"tape","arguments":{"action":"rewind","block":0}}}'
 	echo '{"jsonrpc":"2.0","id":142,"method":"tools/call","params":{"name":"get_registers","arguments":{}}}'
 	echo '{"jsonrpc":"2.0","id":44,"method":"ping"}'
-} | "$BIN" > "$OUT" 2>/tmp/xspeccy-smoke.err
+} | "$BIN" --config "$(native "$CFG")" > "$OUT" 2>"$ERR"
 
 fail=0
 check() {	# check <label> <jq-ish grep pattern>
@@ -351,6 +413,24 @@ check "beta disk present" '"interface\\": \\"Beta Disk'
 check "bad model refused" 'not usable here'
 check "server survived"   '"model\\": \\"Pentagon'
 
+# Settings. The report is the only way to ask what the machine is set to, and
+# every value has to say where it came from.
+check "settings report"    '"count\\": 19'
+check "settings source"    '"source\\": \\"core default'
+check "settings scope"     '"scope\\": \\"needs reset'
+check "settings set"       '"source\\": \\"this session'
+check "settings warns on timing" 'no longer comparable'
+# Refused, never clamped: a silently corrected setting does not do what it says.
+check "settings range"     'video.gamma: 9 is outside'
+check "settings enum"      "not one of: none, a, b"
+check "settings unknown"   'no such setting: nope.nothing'
+check "settings action"    'action must be report, set or reset'
+check "settings reset"     '"value\\": \\"a\\"'
+# Blending: telling flicker from animation is the difference between undoing a
+# flicker and quietly returning motion blur.
+check "blend pattern"      '"pattern\\": \\"'
+
+
 # The orientation text sent with initialize. A tool description says what one
 # tool does; this is the only place the server says which to reach for, so its
 # quiet disappearance would cost an agent more than a missing tool would.
@@ -374,6 +454,19 @@ check "stop reports beam"  '"beam\\": {'
 check "frame_digest size"  '"width\\": 320,\|"height\\": 248,'
 check "frame_digest repeats" '"same_as_frame\\": 0'
 check "frame_digest lines" '"changed_lines\\":'
+
+# Blending, which is what makes a picture that flickers on purpose readable.
+check "beam knows the page" '"screen_page\\": 7'
+check "beam blank coords"   '"blank_x\\":'
+check "beam locates INT"    '"interrupt_at\\":'
+check "attrs follow the ULA" '"page_on_air\\": 7'
+check "attrs read page 7"   '"attributes\\": \\"28 28 28'
+check "attrs page 5 asked"  '"attributes\\": \\"38 38 38'
+check "page range refused"  'is outside 0..255'
+check "video_config"      '"frame_history\\":'
+check "blend refused"     'bad blend: 99'
+check "blend saw two frames" '"distinct_frames\\": 2'
+check "blend mixes in linear light" '"digest\\": \\"45760c0fa5f8'
 
 # Bad arguments: refused by name, and the server still answers afterwards.
 check "addr above space"  'bad from: 100000 is outside the address space'
@@ -402,7 +495,10 @@ fi
 
 # screen_digest: the same screen must hash the same, a changed one must not.
 # Digests appear in file order: 3 from id 66, then one each from 68, 70 and 72.
-mapfile -t DIG < <(grep -o 'digest\\": \\"[0-9a-f]\{12\}' "$OUT" | sed 's/.*\\"//')
+# mapfile arrived in bash 4; macOS still ships 3.2, where it is a syntax error
+# that takes DIG and every check below it with it.
+DIG=()
+while IFS= read -r _line; do DIG+=("$_line"); done < <(grep -o 'digest\\": \\"[0-9a-f]\{12\}' "$OUT" | sed 's/.*\\"//')
 if [ "${#DIG[@]}" -ge 6 ]; then
 	if [ "${DIG[0]}" != "${DIG[1]}" ] && [ "${DIG[1]}" != "${DIG[2]}" ]; then
 		echo "  ok   digest follows the screen (${DIG[0]} ${DIG[1]} ${DIG[2]})"
@@ -428,28 +524,35 @@ else
 fi
 
 if [ -f "$SHOT" ]; then
-	echo "  ok   png written: $SHOT ($(stat -c%s "$SHOT") bytes)"
+	echo "  ok   png written: $SHOT ($(filesize "$SHOT") bytes)"
 else
 	echo "  FAIL png missing"
 	fail=1
 fi
 
+if [ -s "$MIX" ] && head -c 4 "$MIX" | tail -c 3 | grep -q PNG; then
+	echo "  ok   blended png written: $MIX"
+else
+	echo "  FAIL blended png missing"
+	fail=1
+fi
+
 if [ -s "$WAV" ]; then
-	echo "  ok   wav written: $WAV ($(stat -c%s "$WAV") bytes)"
+	echo "  ok   wav written: $WAV ($(filesize "$WAV") bytes)"
 else
 	echo "  FAIL wav missing"
 	fail=1
 fi
 
 if [ -s "$GIF" ] && head -c 6 "$GIF" | grep -q GIF89a; then
-	echo "  ok   gif written: $GIF ($(stat -c%s "$GIF") bytes)"
+	echo "  ok   gif written: $GIF ($(filesize "$GIF") bytes)"
 else
 	echo "  FAIL gif missing or malformed"
 	fail=1
 fi
 
 echo
-echo "stderr:"; sed 's/^/  /' /tmp/xspeccy-smoke.err
+echo "stderr:"; sed 's/^/  /' "$ERR"
 [ $fail -eq 0 ] && echo "SMOKE OK" || echo "SMOKE FAILED"
 echo "full log: $OUT"
 exit $fail

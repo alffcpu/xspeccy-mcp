@@ -12,10 +12,12 @@
 
 #include "json.hpp"
 
+#include "xsp_blend.h"
 #include "xsp_keyboard.h"
 #include "xsp_platform.h"
 #include "xsp_record.h"
 #include "xsp_machine.h"
+#include "xsp_settings.h"
 #include "xsp_video.h"
 
 extern "C" {
@@ -50,7 +52,7 @@ static const char* kXpeccyPinned = "unknown";
 #endif
 
 // Sent with the initialize reply. A tool description can say what one tool does;
-// it cannot say which of fifty-one to reach for, in what order, or which pairs
+// it cannot say which of fifty-two to reach for, in what order, or which pairs
 // of them answer questions that sound identical and are not. That is what this
 // is for, and the protocol has the field precisely so a server can say it once
 // instead of repeating it in every description.
@@ -85,6 +87,16 @@ static const char* kInstructions =
 	"- what did the code do: set_breakpoint, step/step_over/step_out, trace, read_memory\n"
 	"- when in the frame does this code run, and is that stable across frames: beam_log\n"
 	"- put the machine at a raster position: run_to_beam\n"
+	"- the picture flickers on purpose (gigascreen, flickering multicolour): screenshot and "
+	"frame_digest with blend:2 average the last two completed frames, which is the colour a "
+	"person watching sees. One frame of a gigascreen is half the picture and looks like "
+	"neither half; blend it before judging it, or before deciding it is broken. video_config "
+	"makes that the default for every later call.\n"
+	"- the program flips between two screens (double buffering, gigascreen): screen_text and "
+	"screen_attrs read the page that is on air and report it as page/page_on_air, and "
+	"beam_position reports the same as screen_page. Pass page to look at the other one. Do "
+	"not reach for read_memory at $5800 instead: bank 5 is mapped at $4000 whatever the ULA "
+	"is showing, so that answers for the screen nobody is looking at.\n"
 	"Every stop already reports where the beam was, so raster work rarely needs a separate "
 	"beam_position call.\n"
 	"\n"
@@ -209,6 +221,51 @@ static std::string argStr(const json& a, const char* key, const std::string& def
 static bool argBool(const json& a, const char* key, bool def) {
 	if (!a.is_object() || !a.contains(key) || !a[key].is_boolean()) return def;
 	return a[key].get<bool>();
+}
+
+static bool argDouble(const json& a, const char* key, double& out) {
+	if (!a.is_object() || !a.contains(key) || a[key].is_null()) return false;
+	const json& v = a[key];
+	if (v.is_number()) { out = v.get<double>(); return true; }
+	if (v.is_string()) {
+		try { out = std::stod(v.get<std::string>()); return true; } catch (...) {}
+	}
+	throw std::runtime_error(std::string("bad ") + key + ": " + v.dump() + " is not a number");
+}
+
+// How many frames a picture is made of. Shared by every tool that produces one,
+// so `blend` means the same thing everywhere. Absent = whatever video_config
+// last set, true = two frames (a gigascreen), a number = that many.
+static int argBlend(const json& a) {
+	if (!a.is_object() || !a.contains("blend") || a["blend"].is_null()) return -1;
+	if (a["blend"].is_boolean()) return a["blend"].get<bool>() ? 2 : 1;
+	return argNumRange(a, "blend", -1, 0, xsp::blend::kMaxHistory);
+}
+
+// What the blend did, reported next to the picture it made. `distinct` is the
+// part worth reading: an effect that holds each picture for two interrupts
+// blends two identical frames, and the result looks unmixed for a reason that
+// has nothing to do with the blend being broken.
+static json blendJson(const xsp::video::BlendInfo& bi) {
+	json j{{"frames", bi.frames}, {"frames_used", bi.used},
+	       {"distinct_frames", bi.distinct}, {"gamma", bi.gamma},
+	       {"pattern", bi.pattern}};
+	if (bi.used < bi.frames)
+		j["note"] = "only " + std::to_string(bi.used) + " frame(s) in the history - run more "
+			    "frames, or raise frame_history in video_config";
+	else if (bi.distinct < bi.used)
+		j["note"] = "the blended frames are not all different: this effect repeats a picture "
+			    "for more than one interrupt, so blending " + std::to_string(bi.used) +
+			    " frames mixes duplicates. Try a larger blend.";
+	// Different frames are not on their own a reason to blend. Flicker means two
+	// pictures alternating that are meant to be seen as one; an effect that is
+	// simply animating also has different frames, and averaging those is motion
+	// blur. Saying "they differ" would cover both and warn about neither.
+	else if (bi.on && strcmp(bi.pattern, "animation") == 0)
+		j["note"] = "these frames are animating rather than alternating: each one differs "
+			    "from both of the last two, so blending them is motion blur rather than "
+			    "the flicker being undone. Blend is for a picture that alternates.";
+	return j;
 }
 
 // One byte written as bare hex, the way "3E 05 C9" spells it. strtol used to do
@@ -432,6 +489,32 @@ static json machineStateJson() {
 	return out;
 }
 
+// The colours actually present in a picture, as a GIF global colour table.
+//
+// A raw ZX frame only ever holds palette entries, so the emulator's own palette
+// is exact. A blended frame does not: its colours are averages that are in no
+// palette by design, and handing GIF the ZX one would map every mixed colour
+// back to the nearest pure one - which is exactly the mixing the caller asked
+// to see, thrown away on the last step.
+static std::vector<uint32_t> picturePalette(const std::vector<unsigned char>& rgba, bool& exact) {
+	std::map<uint32_t, int> count;
+	for (size_t i = 0; i + 3 < rgba.size(); i += 4)
+		count[(uint32_t)rgba[i] | ((uint32_t)rgba[i + 1] << 8) | ((uint32_t)rgba[i + 2] << 16)]++;
+	std::vector<std::pair<int, uint32_t>> byUse;
+	byUse.reserve(count.size());
+	for (const auto& kv : count) byUse.push_back({kv.second, kv.first});
+	exact = byUse.size() <= 256;
+	if (!exact)
+		std::sort(byUse.begin(), byUse.end(),
+			  [](const std::pair<int, uint32_t>& a, const std::pair<int, uint32_t>& b) {
+				  return a.first > b.first;
+			  });
+	std::vector<uint32_t> pal;
+	for (size_t i = 0; i < byUse.size() && i < 256; i++) pal.push_back(byUse[i].second);
+	if (pal.empty()) pal.push_back(0);
+	return pal;
+}
+
 static void registerTools() {
 
 	// -------------------------------------------------- machine
@@ -497,6 +580,200 @@ static void registerTools() {
 	     "(which ROM/RAM bank is visible at $0000/$4000/$8000/$C000).",
 	     json{},
 	     [](const json&) { return machineStateJson(); });
+
+	tool("video_config",
+	     "Read or change how frames are turned into pictures. No arguments = report.\n"
+	     "blend is the one that matters for flickering effects: set it here and every later "
+	     "screenshot, frame_digest and record_video averages that many frames without being told "
+	     "again. 2 is a gigascreen, 3 a three-frame effect, 1 the raw frame. The averaging happens "
+	     "in linear light, which is why a mix of black and white comes out as the mid grey the eye "
+	     "sees rather than the darker one averaging the bytes would give; gamma is that transfer, "
+	     "and gamma 1 turns it off. frame_history is how many completed frames are kept for "
+	     "blending to draw on - blending more frames than are kept is not possible.\n"
+	     "greyscale and border_size are emulator settings this server otherwise takes defaults "
+	     "for. greyscale applies as frames are drawn, so it shows up on the next frame run, not "
+	     "on the last one already in the buffer.",
+	     json{{"properties", {
+		     {"blend", {{"type", "integer"}, {"description",
+				"default frames to average, 1..8; 1 = off"}}},
+		     {"gamma", {{"description", "transfer used for the blend, 1.0..3.0, default 2.2; "
+				 "1.0 averages the sRGB bytes directly"}}},
+		     {"frame_history", {{"type", "integer"}, {"description",
+					"completed frames to keep, 0..8, default 4. 0 stops recording "
+					"them, which makes blending impossible and saves one frame-sized "
+					"copy per emulated frame"}}},
+		     {"greyscale", {{"type", "boolean"}, {"description", "draw through the grey palette"}}},
+		     {"border_size", {{"type", "integer"}, {"description",
+				      "percentage of the border the frame carries, 0..100"}}}
+	     }}},
+	     [](const json& a) {
+		     json changed = json::array();
+		     auto& def = xsp::blend::defaults();
+		     if (a.is_object() && a.contains("blend") && !a["blend"].is_null()) {
+			     def.frames = argNumRange(a, "blend", def.frames, 1, xsp::blend::kMaxHistory);
+			     changed.push_back("blend");
+		     }
+		     double g = def.gamma;
+		     if (argDouble(a, "gamma", g)) {
+			     if (g < 1.0 || g > 3.0)
+				     throw std::runtime_error("bad gamma: " + std::to_string(g) +
+							      " is outside 1.0..3.0");
+			     def.gamma = g;
+			     changed.push_back("gamma");
+		     }
+		     if (a.is_object() && a.contains("frame_history") && !a["frame_history"].is_null()) {
+			     def.history = argNumRange(a, "frame_history", def.history, 0,
+						       xsp::blend::kMaxHistory);
+			     xsp::blend::setDepth(def.history);
+			     changed.push_back("frame_history");
+		     }
+		     if (a.is_object() && a.contains("greyscale") && !a["greyscale"].is_null()) {
+			     greyScale = argBool(a, "greyscale", false) ? 1 : 0;
+			     changed.push_back("greyscale");
+		     }
+		     if (a.is_object() && a.contains("border_size") && !a["border_size"].is_null()) {
+			     const int pc = argNumRange(a, "border_size", 50, 0, 100);
+			     g_mach.setBorderSize(pc / 100.0);
+			     changed.push_back("border_size");
+		     }
+
+		     Computer* c = g_mach.comp();
+		     json pal = json::array();
+		     for (int i = 0; i < 16; i++) {
+			     char buf[16];
+			     const uint32_t v = c->vid->pal[i];
+			     snprintf(buf, sizeof(buf), "#%02X%02X%02X",
+				      (unsigned)(v & 0xff), (unsigned)((v >> 8) & 0xff),
+				      (unsigned)((v >> 16) & 0xff));
+			     pal.push_back(buf);
+		     }
+		     json res{
+			     {"blend", def.frames},
+			     {"gamma", def.gamma},
+			     {"frame_history", xsp::blend::depth()},
+			     {"frames_recorded", xsp::blend::filled()},
+			     {"greyscale", greyScale != 0},
+			     {"border_size", (int)(g_mach.borderSize() * 100 + 0.5)},
+			     {"screen", {{"width", c->vid->vsze.x}, {"height", c->vid->vsze.y}}},
+			     {"palette", pal}
+		     };
+		     if (!changed.empty()) res["changed"] = changed;
+		     if (def.frames > xsp::blend::depth())
+			     res["warning"] = "blend asks for more frames than frame_history keeps";
+		     return res;
+	     });
+
+	tool("settings",
+	     "Every emulator setting this server can change, what it is set to now, and where that "
+	     "value came from. Without arguments it reports all of them, which is the way to answer "
+	     "\"what machine am I actually running\" - several of these were fixed in the source "
+	     "before and could not be seen at all, so a server could quietly differ from the "
+	     "emulator's own configuration. action: report (default), set, reset.\n"
+	     "\n"
+	     "`set` changes one for the session; `save: true` also writes it into a settings file, "
+	     "so a project keeps its machine in its own repository and every session starts the "
+	     "same. `scope` on each row says whether a change takes effect at once, needs a reset, "
+	     "or is read only at startup. Changing anything under `timing.` invalidates every "
+	     "frame_cost, profile and beam_log measured before it, and the reply says so.",
+	     json{{"properties", {
+		     {"action", {{"type", "string"}, {"description", "report (default) | set | reset"}}},
+		     {"name", {{"type", "string"}, {"description", "setting name, e.g. timing.contPattern"}}},
+		     {"value", {{"description", "new value; enums by name, booleans as yes/no"}}},
+		     {"save", {{"type", "boolean"}, {"description",
+			       "with set, also write it to the settings file"}}},
+		     {"path", {{"type", "string"}, {"description",
+			       "settings file to write; default is beside the Xpeccy config"}}}
+	     }}},
+	     [](const json& a) {
+		     namespace st = xsp::settings;
+		     const std::string action = argStr(a, "action", "report");
+
+		     auto describe = [](const st::Setting& s) {
+			     json row{
+				     {"name", s.name},
+				     {"value", st::formatValue(s, s.get(g_mach))},
+				     {"default", st::formatValue(s, s.def)},
+				     {"source", st::sourceName(st::sourceOf(s.name))},
+				     {"scope", s.scope == st::Scope::Live ? "live"
+					       : s.scope == st::Scope::NeedsReset ? "needs reset"
+										  : "needs restart"},
+				     {"affects", s.affects}
+			     };
+			     if (s.xpeccyKey) row["xpeccy_key"] = s.xpeccyKey;
+			     if (s.type == st::Type::Enum) {
+				     json opts = json::array();
+				     for (int i = 0; s.enumNames[i]; i++) opts.push_back(s.enumNames[i]);
+				     row["options"] = opts;
+			     } else if (s.type != st::Type::Bool) {
+				     row["min"] = st::formatValue(s, s.lo);
+				     row["max"] = st::formatValue(s, s.hi);
+			     }
+			     if (s.flags & st::TimingBaseline)
+				     row["invalidates"] = "timing baselines measured before the change";
+			     if (s.flags & st::DropsHistory)
+				     row["invalidates"] = "the blended-frame history";
+			     return row;
+		     };
+
+		     if (action == "report") {
+			     json rows = json::array();
+			     for (const auto& s : st::table()) rows.push_back(describe(s));
+			     return json{
+				     {"settings", rows},
+				     {"count", (int)st::table().size()},
+				     {"settings_file", st::defaultSavePath(g_mach.env().confDir)},
+				     {"xpeccy_config", g_mach.env().confDir},
+				     {"note", "settings fixed when the server was built are not "
+					      "listed here, because listing them would suggest "
+					      "they could be changed"}
+			     };
+		     }
+
+		     const std::string name = argStr(a, "name", "");
+		     if (name.empty()) throw std::runtime_error("name required");
+		     const st::Setting* s = st::find(name);
+		     if (!s) throw std::runtime_error("no such setting: " + name +
+						      " (call settings with no arguments for the list)");
+
+		     if (action == "reset") {
+			     std::string err;
+			     if (!st::apply(g_mach, *s, s->def, err)) throw std::runtime_error(err);
+			     st::markSource(s->name, st::Source::Default);
+			     return json{{"changed", describe(*s)}};
+		     }
+		     if (action != "set")
+			     throw std::runtime_error("action must be report, set or reset");
+
+		     if (!a.contains("value") || a["value"].is_null())
+			     throw std::runtime_error("value required");
+		     std::string text;
+		     if (a["value"].is_string()) text = a["value"].get<std::string>();
+		     else if (a["value"].is_boolean()) text = a["value"].get<bool>() ? "yes" : "no";
+		     else text = a["value"].dump();
+
+		     double v = 0;
+		     std::string err;
+		     if (!st::parseValue(*s, text, v, err)) throw std::runtime_error(err);
+		     if (!st::apply(g_mach, *s, v, err)) throw std::runtime_error(err);
+		     st::markSource(s->name, st::Source::Session);
+
+		     json res{{"changed", describe(*s)}};
+		     if (s->scope == st::Scope::NeedsReset)
+			     res["note"] = "stored, but the machine has to be reset before it means "
+					   "anything";
+		     if (s->flags & st::TimingBaseline)
+			     res["note"] = "every timing measurement taken before this is no longer "
+					   "comparable; measure again";
+		     if (argBool(a, "save", false)) {
+			     std::string path = argStr(a, "path", "");
+			     if (path.empty()) path = st::defaultSavePath(g_mach.env().confDir);
+			     std::string used, serr;
+			     if (!st::save(path, s->name, st::formatValue(*s, v), used, serr))
+				     throw std::runtime_error(serr);
+			     res["saved_to"] = used;
+		     }
+		     return res;
+	     });
 
 	tool("reset",
 	     "Reset the machine. mode: default, 48, 128, dos, shadow. Runs boot_frames afterwards "
@@ -938,15 +1215,24 @@ static void registerTools() {
 	tool("screenshot",
 	     "Write the last completed frame to a PNG file and return its path - the ground truth of "
 	     "what is on screen. Open the file to look at it. border=false crops to the 256x192 paper "
-	     "area, scale enlarges by pixel doubling.",
+	     "area, scale enlarges by pixel doubling.\n"
+	     "blend is for flickering pictures. A gigascreen, or any effect that alternates images "
+	     "faster than the eye separates them, is meant to be seen as one picture whose colours "
+	     "are not in the palette at all; a single frame is one half of that and looks like "
+	     "neither. blend:2 averages the last two completed frames, blend:3 the last three, and "
+	     "the result is the colour a person watching the screen sees. It reads the frame history "
+	     "and changes nothing about the machine.",
 	     json{{"properties", {
 		     {"path", {{"type", "string"}, {"description", "output file; default: a temp file"}}},
 		     {"border", {{"type", "boolean"}, {"description", "include the border, default true"}}},
-		     {"scale", {{"type", "integer"}, {"description", "1..8, default 1"}}}
+		     {"scale", {{"type", "integer"}, {"description", "1..8, default 1"}}},
+		     {"blend", {{"description", "frames to average: 2 for a gigascreen, 3 for a "
+				 "three-frame effect, 1 for the raw frame (default)"}}}
 	     }}},
 	     [](const json& a) {
 		     bool border = argBool(a, "border", true);
 		     int scale = argNumOr(a, "scale", 1);
+		     const int blend = argBlend(a);
 		     std::string path = argStr(a, "path");
 		     if (path.empty()) {
 			     std::string dir = xsp::platform::join(xsp::platform::tempDir(), "xspeccy-mcp");
@@ -955,13 +1241,16 @@ static void registerTools() {
 			     snprintf(buf, sizeof(buf), "shot-%03d.png", ++g_shotCounter);
 			     path = xsp::platform::join(dir, buf);
 		     }
-		     auto shot = xsp::video::capture(g_mach.comp(), border, scale);
+		     xsp::video::BlendInfo bi;
+		     auto shot = xsp::video::capture(g_mach.comp(), border, scale, blend, &bi);
 		     if (shot.rgba.empty()) throw std::runtime_error("no frame captured yet - run some frames first");
 		     std::string err;
 		     if (!xsp::writePng(path, shot.rgba.data(), shot.width, shot.height, err))
 			     throw std::runtime_error(err);
-		     return json{{"path", path}, {"width", shot.width}, {"height", shot.height},
-			     {"border", border}, {"scale", scale}};
+		     json res{{"path", path}, {"width", shot.width}, {"height", shot.height},
+			      {"border", border}, {"scale", scale}};
+		     if (bi.frames > 1) res["blend"] = blendJson(bi);
+		     return res;
 	     });
 
 	tool("record_video",
@@ -983,7 +1272,10 @@ static void registerTools() {
 				     "to skip the precalculation"}}},
 		     {"border", {{"type", "boolean"}, {"description", "include the border, default true"}}},
 		     {"scale", {{"type", "integer"}, {"description", "1..8, default 1"}}},
-		     {"audio", {{"type", "boolean"}, {"description", "add the sound track (mp4/webm only), default true"}}}
+		     {"audio", {{"type", "boolean"}, {"description", "add the sound track (mp4/webm only), default true"}}},
+		     {"blend", {{"description", "average this many frames into each recorded one, so a "
+				 "gigascreen records as the picture it is meant to be instead of a "
+				 "flicker; 2 for a gigascreen, 3 for a three-frame effect"}}}
 	     }}},
 	     [](const json& a) {
 		     int frames = argNumOr(a, "frames", 100);
@@ -1030,6 +1322,7 @@ static void registerTools() {
 		     if (nth < 1) nth = 1;
 		     const bool border = argBool(a, "border", true);
 		     const int scale = argNumOr(a, "scale", 1);
+		     const int blend = argBlend(a);
 
 		     std::string path = argStr(a, "path");
 		     if (path.empty()) {
@@ -1053,8 +1346,9 @@ static void registerTools() {
 		     const double outFps = fps / nth;
 		     const bool withAudio = !gif && argBool(a, "audio", true);
 
-		     // first frame decides the geometry
-		     auto shot = xsp::video::capture(c, border, scale);
+		     // first frame decides the geometry, and with blending the palette too
+		     xsp::video::BlendInfo bi;
+		     auto shot = xsp::video::capture(c, border, scale, blend, &bi);
 		     if (shot.rgba.empty()) throw std::runtime_error("no frame to record yet - run some frames first");
 
 		     xsp::record::GifWriter gifw;
@@ -1062,8 +1356,17 @@ static void registerTools() {
 		     std::string err;
 		     std::string videoPath = path;
 		     std::string tmpVideo, tmpWav;
+		     bool paletteExact = true;
 		     if (gif) {
-			     if (!gifw.open(path, shot.width, shot.height, c->vid->pal, 256, 0, err))
+			     std::vector<uint32_t> mixed;
+			     const uint32_t* pal = c->vid->pal;
+			     int palSize = 256;
+			     if (bi.on) {
+				     mixed = picturePalette(shot.rgba, paletteExact);
+				     pal = mixed.data();
+				     palSize = (int)mixed.size();
+			     }
+			     if (!gifw.open(path, shot.width, shot.height, pal, palSize, 0, err))
 				     throw std::runtime_error(err);
 		     } else {
 			     if (withAudio) {
@@ -1084,7 +1387,7 @@ static void registerTools() {
 		     for (int i = 0; i < frames; i++) {
 			     g_mach.runFrames(1);
 			     if (i % nth) continue;
-			     auto f = xsp::video::capture(c, border, scale);
+			     auto f = xsp::video::capture(c, border, scale, blend);
 			     if (f.width != shot.width || f.height != shot.height) continue;	// geometry changed mid-recording
 			     bool ok = gif ? gifw.addFrame(f.rgba.data(), delayCs, err)
 					   : ff.addFrame(f.rgba.data(), f.rgba.size(), err);
@@ -1132,22 +1435,53 @@ static void registerTools() {
 		     };
 		     if (!skipped.is_null()) res["skipped_to"] = skipped;
 		     if (!autoNth.is_null()) res["every_nth_auto"] = autoNth;
+		     if (bi.frames > 1) {
+			     res["blend"] = blendJson(bi);
+			     if (gif && !paletteExact)
+				     res["blend"]["palette"] = "the blend made more than 256 colours; "
+							       "the 256 most used are exact and the rest "
+							       "are nearest matches. Record .mp4 for all of them.";
+		     }
 		     return res;
 	     });
 
 	tool("screen_text",
 	     "Decode the ZX screen into 32x24 text by matching each cell against the ROM font. Cheap "
 	     "way to read a BASIC listing or a menu. Graphics come out as '?' - for anything visual "
-	     "use screenshot, which shows the real pixels.",
-	     json{},
-	     [](const json&) { return json{{"screen", xsp::video::screenText(g_mach.comp())}}; });
+	     "use screenshot, which shows the real pixels. Reads the screen page the ULA is actually "
+	     "displaying, and says which one that was; `page` reads a given RAM page instead.",
+	     json{{"properties", {
+		     {"page", {{"type", "integer"}, {"description",
+			      "RAM page to read, 0-255. Default: the page on air ($7FFD bit 3, so 5 or 7)"}}}
+	     }}},
+	     [](const json& a) {
+		     Computer* c = g_mach.comp();
+		     const int req = argNumRange(a, "page", -1, 0, 255);
+		     const int page = (req < 0) ? xsp::video::displayedPage(c) : req;
+		     return json{{"screen", xsp::video::screenText(c, page)},
+				 {"page", page},
+				 {"page_on_air", xsp::video::displayedPage(c)}};
+	     });
 
 	tool("screen_attrs",
 	     "The 32x24 attribute grid as hex (ink/paper/bright/flash per cell). Cheaper to read "
 	     "than a screenshot when the question is about colour rather than shape, and unlike a "
-	     "PNG it can be compared in the reply itself.",
-	     json{},
-	     [](const json&) { return json{{"attributes", xsp::video::screenAttrs(g_mach.comp())}}; });
+	     "PNG it can be compared in the reply itself. Reads the screen page the ULA is actually "
+	     "displaying, and says which one that was; `page` reads a given RAM page instead. That "
+	     "matters for anything that flips screens between frames: the attributes of the page "
+	     "nobody is looking at describe a picture that is not on the screen.",
+	     json{{"properties", {
+		     {"page", {{"type", "integer"}, {"description",
+			      "RAM page to read, 0-255. Default: the page on air ($7FFD bit 3, so 5 or 7)"}}}
+	     }}},
+	     [](const json& a) {
+		     Computer* c = g_mach.comp();
+		     const int req = argNumRange(a, "page", -1, 0, 255);
+		     const int page = (req < 0) ? xsp::video::displayedPage(c) : req;
+		     return json{{"attributes", xsp::video::screenAttrs(c, page)},
+				 {"page", page},
+				 {"page_on_air", xsp::video::displayedPage(c)}};
+	     });
 
 	tool("screen_digest",
 	     "A short hash of the screen, per frame - the cheap way to prove an optimisation did not "
@@ -1261,12 +1595,15 @@ static void registerTools() {
 		     {"sync", {{"type", "string"}, {"description", "halt | frame (default) | an address/label"}}},
 		     {"skip_until", {{"type", "string"}, {"description",
 				     "run to this address/label before hashing - e.g. past the precalculation"}}},
-		     {"max_instructions", {{"type", "integer"}, {"description", "per-frame budget, default 20000000"}}}
+		     {"max_instructions", {{"type", "integer"}, {"description", "per-frame budget, default 20000000"}}},
+		     {"blend", {{"description", "hash the average of this many frames instead of one, "
+				 "which is what to compare when the picture flickers on purpose"}}}
 	     }}},
 	     [](const json& a) {
 		     int frames = argNumRange(a, "frames", 1, 1, 10000);
 		     const bool border = argBool(a, "border", true);
 		     const bool perLine = argBool(a, "lines", false);
+		     const int blend = argBlend(a);
 		     json skipped = skipUntil(a);
 		     // A hardware frame by default, unlike screen_digest: the picture is
 		     // made by the ULA, and its unit is the interrupt rather than wherever
@@ -1283,6 +1620,7 @@ static void registerTools() {
 		     std::vector<std::string> prevLines;
 		     bool truncated = false;
 		     int width = 0, height = 0;
+		     xsp::video::BlendInfo blendInfo;
 		     std::map<std::string, int> seen;	// digest -> first frame that had it
 		     for (int i = 0; i < frames; i++) {
 			     if (sync.byInterrupt) {
@@ -1291,8 +1629,10 @@ static void registerTools() {
 				     xsp::FrameCost fc = g_mach.frameCost(sync.pc, budget);
 				     if (!fc.complete) truncated = true;
 			     }
+			     xsp::video::BlendInfo bi;
 			     xsp::video::FrameHash fh =
-				     xsp::video::frameDigest(g_mach.comp(), border, perLine);
+				     xsp::video::frameDigest(g_mach.comp(), border, perLine, blend, &bi);
+			     blendInfo = bi;
 			     if (fh.digest.empty())
 				     throw std::runtime_error("no frame buffer to hash yet - run first");
 			     width = fh.width;
@@ -1337,6 +1677,7 @@ static void registerTools() {
 			      {"width", width}, {"height", height},
 			      {"unique_digests", (int)seen.size()},
 			      {"digests", list}};
+		     if (blendInfo.frames > 1) res["blend"] = blendJson(blendInfo);
 		     if (!skipped.is_null()) res["skipped_to"] = skipped;
 		     if (truncated)
 			     res["warning"] = "no frame boundary within max_instructions - the digest "
@@ -1546,7 +1887,14 @@ static void registerTools() {
 	tool("beam_position",
 	     "Where the video beam is right now: dot and line inside the full frame, which zone it is "
 	     "in (paper, border or blanking), and the T-state count since the interrupt. This is what "
-	     "you need when debugging multicolour, border effects or anything raster-timed.",
+	     "you need when debugging multicolour, border effects or anything raster-timed.\n"
+	     "Three coordinate systems describe the same beam and the reply carries all of them: "
+	     "dot/line count from the top-left of the visible image, paper_x/paper_y from the corner "
+	     "of the main screen, and blank_x/blank_y from the leading edge of the blanking. The last "
+	     "one is not decoration: the frame interrupt is defined in it, and `interrupt_at` gives "
+	     "its position, so blank_x/blank_y against interrupt_at is how far the beam is from INT.\n"
+	     "`screen_page` is the RAM page the ULA is reading, which is bit 3 of $7FFD. Code that "
+	     "flips screens between frames moves that and nothing else.",
 	     json{},
 	     [](const json&) {
 		     Computer* c = g_mach.comp();
@@ -1562,6 +1910,9 @@ static void registerTools() {
 			     {"dot", x}, {"line", y}, {"zone", zone},
 			     {"paper_x", inPaperX ? x - v->bord.x : -1},
 			     {"paper_y", inPaperY ? y - v->bord.y : -1},
+			     {"blank_x", v->ray.xb}, {"blank_y", v->ray.yb},
+			     {"interrupt_at", {{"blank_x", v->intp.x}, {"blank_y", v->intp.y}}},
+			     {"screen_page", v->vidPage},
 			     {"t_states_frame", c->frmtCount},
 			     {"t_states_per_frame", tm.tPerFrame},
 			     {"t_states_per_line", tm.tPerLine},
@@ -2374,6 +2725,8 @@ static void registerTools() {
 		     else if (ext == "bin") res = loadBIN(c, path.c_str(), drv);
 		     else throw std::runtime_error("unsupported extension '" + ext + "'");
 		     if (res != ERR_OK) throw std::runtime_error("loader failed with code " + std::to_string(res));
+		     // the frames still in the history were drawn by whatever ran before
+		     xsp::video::historyClear();
 		     return json{{"path", path}, {"format", ext}, {"ok", true},
 			     {"pc", cpu_get_pc(c->cpu)}, {"pc_hex", hex16(cpu_get_pc(c->cpu))}};
 	     });
@@ -2596,6 +2949,7 @@ static void handle(const json& req) {
 
 int main(int argc, char** argv) {
 	std::string configDir;
+	std::string settingsPath;
 	for (int i = 1; i < argc; i++) {
 		std::string a = argv[i];
 		if (a == "--version") {
@@ -2607,7 +2961,7 @@ int main(int argc, char** argv) {
 			return 0;
 		}
 		if (a == "--help") {
-			printf("usage: %s [--config <xpeccy config dir>]\n", argv[0]);
+			printf("usage: %s [--config <xpeccy config dir>] [--settings <file>]\n", argv[0]);
 			return 0;
 		}
 		if (a == "--config") {
@@ -2620,6 +2974,14 @@ int main(int argc, char** argv) {
 			configDir = argv[++i];
 		}
 		else if (a.compare(0, 9, "--config=") == 0) configDir = a.substr(9);
+		else if (a == "--settings") {
+			if (i + 1 >= argc) {
+				fprintf(stderr, "xspeccy-mcp: --settings needs a file\n");
+				return 1;
+			}
+			settingsPath = argv[++i];
+		}
+		else if (a.compare(0, 11, "--settings=") == 0) settingsPath = a.substr(11);
 	}
 
 	xsp::platform::setBinaryStdio();	// Windows would otherwise rewrite \n
@@ -2630,6 +2992,21 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	fprintf(stderr, "xspeccy-mcp: %s\n", g_mach.env().note.c_str());
+
+	// Our own settings, after the emulator's configuration and before anything
+	// runs, so the first frame is already the machine the caller asked for.
+	{
+		auto rep = xsp::settings::loadFiles(g_mach, g_mach.env().confDir, settingsPath);
+		for (const std::string& f : rep.files)
+			fprintf(stderr, "xspeccy-mcp: settings from %s\n", f.c_str());
+		for (const std::string& a : rep.applied)
+			fprintf(stderr, "xspeccy-mcp:   %s\n", a.c_str());
+		// Loudly, on the way in: a settings file that is silently half-ignored
+		// is worse than none, because the machine is then not what it says.
+		for (const std::string& p : rep.problems)
+			fprintf(stderr, "xspeccy-mcp: settings: %s\n", p.c_str());
+	}
+
 	g_mach.runFrames(100);			// reach the prompt before the first request
 
 	registerTools();

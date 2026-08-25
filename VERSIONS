@@ -9,7 +9,7 @@
 
 # The server's own version, reported over MCP as serverInfo.version and by
 # --version. See CHANGELOG.md.
-XSPECCY_MCP_VERSION = 1.2.0
+XSPECCY_MCP_VERSION = 1.3.0
 
 # The Xpeccy release the server is built and tested against. This name is for
 # people; the pin that actually binds is XPECCY_COMMIT below.
@@ -17,20 +17,26 @@ XSPECCY_MCP_VERSION = 1.2.0
 # Use a dated tag and nothing else. Upstream also publishes tags called `stable`
 # and `minor`, and both are moving pointers - at the time of writing `stable` is
 # 3f05efa while this tag is a385440. Pinning to a name that moves is not a pin.
-XPECCY_VERSION = 0.6.20260804
+XPECCY_VERSION = 0.6.20260820
 
 # What build.py actually downloads. A tag can be moved; a commit cannot, so the
 # archive fetched by this SHA is the same bytes forever.
-XPECCY_COMMIT = a385440d9c53e296f08ef98251454c2633e0d4d1
+XPECCY_COMMIT = d95018d359c780cd5325e0027495ce31fd97ec46
 
 # The oldest release that compiles at all, which is a different fact from the one
 # above and only happens to be the same release today. This one is fixed by the
-# source: 0.6.20260804 reshaped Computer's status bits into sysflag[], and the
-# build probes for the flgBRK marker that arrived with it. XPECCY_VERSION can
-# move forward without this following, and then the two say different things -
-# which is why the build reads both rather than repeating a number in its
-# messages.
-XPECCY_MINIMUM = 0.6.20260804
+# source, and it has moved twice for two different reasons:
+#
+#   0.6.20260804 reshaped Computer's status bits into sysflag[] (marker: flgBRK).
+#   0.6.20260820 renamed Video.curscr to Video.vidPage. beam_position and the
+#   screen_* tools read that field to say which screen page is on air, so a tree
+#   older than this one no longer compiles. The build probes for vidPage, which
+#   is the stricter of the two markers and therefore the only one worth testing.
+#
+# XPECCY_VERSION can move forward without this following, and then the two say
+# different things - which is why the build reads both rather than repeating a
+# number in its messages.
+XPECCY_MINIMUM = 0.6.20260820
 
 # SHA-256 of the src/libxpeccy sources, which is the only part of Xpeccy we
 # compile. Not a hash of the tarball: GitHub generates those on the fly and has
@@ -44,4 +50,4 @@ XPECCY_MINIMUM = 0.6.20260804
 # alone while being character for character the same C. Hashing raw bytes would
 # report a corrupt dependency on every Windows machine and be ignored within a
 # week, which is worse than not checking.
-XPECCY_LIBXPECCY_SHA256 = 20b19d82e3d79091a987611fc572fcf459ceb8b94d448cbe0a957cc39a2dea9c
+XPECCY_LIBXPECCY_SHA256 = 99868f8c16aa129045b87a038e0391626c43a13914433dda17e994f9ec976f41

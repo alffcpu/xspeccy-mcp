@@ -170,6 +170,10 @@ public:
 	bool setMemory(int kb, std::string& err);
 	bool setRomset(const std::string& name, std::string& err);
 	bool setLayout(const std::string& name, std::string& err);
+	// How much of the border the frame carries, 0..1 - Xpeccy's `bordersize`.
+	// Changing it changes the size of every picture the tools produce.
+	double borderSize() const;
+	void setBorderSize(double frac);
 	void reset(int mode = RES_DEFAULT);
 
 	// execution

@@ -27,6 +27,165 @@ would silently redefine what "unchanged" means.
 Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a dated upstream tag and never
 `stable` or `minor`: both are moving pointers, and a name that moves is not a pin.
 
+## 1.3.0
+
+Seeing a picture that flickers on purpose, settings that were fixed in the source, and
+which of the two screens is actually on air. **51 tools -> 53.**
+
+Built and tested against Xpeccy `0.6.20260820`.
+
+### New tool
+
+| Tool | What it does |
+|---|---|
+| `video_config` | Reads or changes how frames become pictures: the default blend, its gamma, how many completed frames are kept, greyscale, border size. No arguments = report, including the 16-colour palette in use. |
+| `settings` | Every emulator setting this server can change: what it is now, what the default is, where the current value came from, and what changing it costs. `set` changes one for the session, `save: true` writes it to a file, `reset` puts it back. |
+
+### Added
+
+- **`blend` on `screenshot`, `frame_digest` and `record_video`.** A gigascreen alternates two
+  pictures every interrupt and is meant to be seen as one; the colour it is after is in
+  neither frame, because it exists only where the eye and the phosphor average the two. A
+  screenshot catches one of the alternating frames - the one thing the effect was never meant
+  to show - so what came back was half the effect and looked like a fault that was not there.
+  `blend: 2` averages the last two completed frames, `blend: 3` the last three, and the
+  result is the picture a person watching the screen sees.
+
+  The average is taken in linear light, not on the sRGB bytes: black alternating with bright
+  white comes out `#B6B6B6` rather than the `#808080` that averaging encoded values gives,
+  and too dark is exactly the failure the
+  [reference on gigascreen colour](https://hype.retroscene.org/blog/graphics/808.html)
+  is about. `gamma` is that transfer and defaults to 2.2; at 2.4 the same mix is `#BCBCBC`,
+  which is the value that article arrives at.
+
+  `frame_digest {"blend": 2}` hashes the mixed picture, which is the only way to ask whether
+  a flickering effect is stable: its raw digest alternates between two values forever and
+  says nothing.
+
+- **`distinct_frames` in the reply**, next to `frames_used`. An effect that holds each picture
+  for two interrupts blends two identical frames and looks unmixed for a reason that has
+  nothing to do with the blend, so the reply says how many of the blended frames actually
+  differed rather than leaving that to be guessed.
+
+- **A GIF of a blended recording gets a palette built from the blended picture.** The ZX
+  palette is exact for a raw frame and wrong for a mixed one: every averaged colour would be
+  mapped back to the nearest pure one, which is the mixing thrown away on the last step.
+
+### Notes on how it works
+
+The server keeps the last few completed frames as it runs (`frame_history`, four by default)
+and composes the blend from copies. Nothing is blended in place, so a raw screenshot taken
+after a blended one is the same raw screenshot it would always have been, two blended
+screenshots of the same moment are byte-identical, and no measurement moves. Keeping the
+history costs one frame-sized copy per emulated frame, which did not show up above the noise
+in 500-frame runs; `frame_history: 0` switches it off.
+
+This is deliberately not upstream's antiflicker. Xpeccy blends destructively into the buffer
+it displays, and its adaptive modes guess which pixels are "really" alternating so that a
+static picture stays sharp on a monitor - both of which are right for a human watching and
+wrong for a tool whose output is treated as ground truth. What is kept from upstream is the
+part that is not a matter of taste: the averaging happens in linear light.
+
+The history is dropped on a reset, a `load_file` and a geometry change, because frames from
+either side of one of those belong to different pictures.
+
+### Added: settings
+
+- **19 settings that could not be reached before.** An audit of every setting found the
+  server quietly running a machine nobody had chosen: the reset bank booting 48 BASIC while
+  the emulator's own profile said TR-DOS, contention on a different group of banks than the
+  profile asked for, and nothing configuring sound at all. Those are now rows in a table:
+  the contention pattern, early timing, border step, contended memory and I/O, the screen-port
+  wait, the CPU multiplier, the reset bank, floppy turbo, the AY type, stereo mode and clock,
+  and the picture settings.
+- **A settings file.** `xspeccy-mcp.conf`, the same `KEY = VALUE` with `[section]` headers as
+  everything else here. Read from beside the Xpeccy configuration, then from the working
+  directory, then from `--settings`; later wins. The working-directory one is the point: a ZX
+  project carries its machine in its own repository, so every session starts the same and
+  changing it is a commit rather than something somebody once typed. Saving preserves the
+  comments, order and sections already in the file.
+- **Where a value came from** is reported per setting - core default, settings file, or this
+  session - because "why is the machine like this" cannot be answered without it.
+- **`pattern` on every blended capture**: `still`, `flicker` or `animation`. Blending is for
+  flicker, two pictures alternating that are meant to be seen as one. An effect that is simply
+  animating also has frames that differ, and averaging those is motion blur; the reply now
+  says which it is rather than leaving both looking alike. Found by running the blend against
+  a real effect, where it silently returned a smeared picture.
+
+### Notes on settings
+
+Settings are refused outside their range, never clamped: a value that is quietly corrected is
+a setting that does not do what the file says it does. Changing anything under `timing.`
+invalidates every `frame_cost`, `profile` and `beam_log` measured before it, and the reply
+says so. `boot.resetBank = dos` only reaches TR-DOS if the romset carries a TR-DOS ROM; the
+stock ZX48 romset does not, and the setting says so rather than leaving a blank screen
+unexplained.
+
+Settings fixed when the server is built are deliberately not in the table, because listing
+them would suggest they could be changed.
+
+### Changed: the upstream pin
+
+- **Upstream pin moved to `0.6.20260820`** from `0.6.20260804`. Checked before moving: the
+  whole smoke log comes out line for line identical on both, pinned frame digests included,
+  and raster timing, beam position, frame digests and frame cost agree on Pentagon, ZX48K,
+  ZX128K and Scorpion. The release itself is upstream's TSConf/PentEvo and FM work, so almost
+  none of it reaches a Spectrum. One thing does: `ay-3-8910.c` changed the AY stereo mix from
+  `left = lef + cen/2` to `left = (11*lef + 5*cen)/16`, which moves the levels `sound_state`
+  and `audio_capture` report once the AY is actually sounding. The suite does not pin those
+  values and this change does not add a pin for them.
+- **The oldest Xpeccy that compiles is now `0.6.20260820`.** That release renamed
+  `Video.curscr` to `Video.vidPage`, and the tools below read it. `XPECCY_MINIMUM` and the
+  CMake probe moved with it - the probe now looks for `vidPage` in `video/video.h`, which is
+  the stricter of the two markers this project has used.
+
+### Added: unit tests
+
+- **`tests/unit/`**, 411 checks over the logic that needs no emulator: the linear-light colour
+  arithmetic, the frame ring, the 128K `bank:offset` map, the listing lookups and the PNG
+  writer. It links only the modules that do not reference `Computer`, which keeps the claim
+  "this part is free of the core" checkable rather than asserted, and builds in about a second.
+  No test framework: the harness is forty lines, and this project vendors one dependency.
+- The reason it earns its place is that the end-to-end suite cannot see inside. Reversing the
+  order of the frame history leaves `smoke.sh` passing all 135 checks - a two-frame blend is
+  the same colour either way round - and fails four unit checks. Wrong-everywhere lookup
+  tables have the same property: they hash consistently with themselves forever.
+- `python build.py --smoke` runs both, unit first; `ctest` runs the unit suite; the target is
+  `EXCLUDE_FROM_ALL` and can be switched off with `-DXSP_UNIT_TESTS=OFF`.
+
+### Fixed
+
+- **The test suite runs on macOS.** It used `mktemp --suffix`, `mapfile` and `stat -c%s`, all
+  three GNU spellings that BSD userland and the bash 3.2 macOS ships do not have. The first
+  one printed `unrecognized option` and returned nothing, so every path built from it was
+  empty and seventeen checks failed for a reason unconnected to the server. macOS now passes
+  135 of 135.
+- **The test suite no longer depends on the machine it runs on.** It read whatever Xpeccy
+  configuration happened to be installed, while its expected values were measured against the
+  built-in defaults, so on a developer's own machine the romset and screen geometry were
+  somebody else's and three checks failed. It now runs the server against an empty
+  configuration directory. For a project whose argument is determinism, a suite whose answers
+  moved with the host was the wrong thing to leave in place.
+
+### Added: which screen is on air
+
+- **`screen_text` and `screen_attrs` read the screen that is on air**, and report it as `page`
+  and `page_on_air`. Both used to read through the CPU's view, and on a 128K or a Pentagon
+  bank 5 is mapped at `$4000` whatever the ULA is doing - so for anything that flips screens
+  between frames, both tools described the screen nobody was looking at. They now read the way
+  the ULA does (`vid_mrd_cb`: `ramData[MADR(page,adr) & ramMask]`), which is also what makes
+  this correct on a 48K, where there is no bank 5 and the address wraps onto the one screen.
+- **`page` argument** on both, to read a given RAM page anyway. `{"page": 5}` while 7 is on air
+  is how you compare the two halves of a gigascreen, or look at the frame being built next.
+- **`beam_position` reports `screen_page`**, the same number, so a raster stop says which
+  screen the beam was on.
+- **`beam_position` reports `blank_x`/`blank_y` and `interrupt_at`.** The core tracks the beam
+  in three coordinate systems and only two were visible. The third counts from the leading edge
+  of the blanking, and it is the one the frame interrupt is defined in, so the distance from
+  `blank_x`/`blank_y` to `interrupt_at` is how far the beam is from `INT` - which cannot be
+  worked out from `dot`/`line`, because the blanking is not part of the visible image those
+  count from.
+
 ## 1.2.0
 
 ### Added

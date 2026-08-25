@@ -26,6 +26,7 @@ After that, pick by question:
 | Question | Tool |
 |---|---|
 | What is on screen? | `screenshot`, `screen_text`, `screen_attrs` |
+| Which of the two screens is on air? | `beam_position` → `screen_page`, or `page_on_air` on either screen tool |
 | Did my change alter the data? | `screen_digest` |
 | Did my change alter the picture? | `frame_digest` |
 | Does a frame fit, and what is the headroom? | `frame_cost` |
@@ -33,6 +34,45 @@ After that, pick by question:
 | What did the code actually do? | `set_breakpoint`, `step`, `trace`, `read_memory` |
 | When in the frame does this run, and is it stable? | `beam_log` |
 | Put the machine at a raster position | `run_to_beam` |
+| The picture flickers on purpose (gigascreen) | `screenshot` with `blend`, `video_config` |
+| What can I configure, and what is it set to? | `settings` |
+
+## Pin the machine a project needs
+
+Several things that change how a program behaves are settings rather than arguments: which
+RAM banks the ULA steals cycles from, whether contention is on at all, which ROM page a reset
+lands in, the AY clock. `settings` with no arguments reports all of them, what they are set
+to, and where that value came from.
+
+```jsonc
+settings {}                                              // what am I actually running?
+settings {"action": "set", "name": "timing.contPattern", "value": "b"}
+settings {"action": "set", "name": "video.blend", "value": 2, "save": true}
+```
+
+`save: true` writes it into `xspeccy-mcp.conf`. Keep that file in the project's repository and
+every session starts from the same machine, which is the difference between a measurement that
+can be repeated next week and one that cannot.
+
+Two things the reply tells you and it is worth reading. `scope` says whether the change is
+live, needs a reset, or is only read at startup. And anything under `timing.` invalidates every
+`frame_cost`, `profile` and `beam_log` taken before it, because they were measured on a
+different machine.
+
+What is there, by prefix:
+
+| Prefix | What it covers |
+|---|---|
+| `timing.` | contention pattern and whether contention is on at all, early timing, border step, the screen-port wait, a turbo multiplier on the CPU clock |
+| `boot.` | which ROM page a reset lands in |
+| `disk.` | floppy turbo, which decides whether a load costs emulated time |
+| `video.` | blend and its gamma, how many frames are kept, greyscale, border size, ULAplus, ATM2 palette decoding |
+| `sound.` | AY or YM, stereo mode, and the chip clock, which every note scales with |
+
+Values are refused outside their range rather than quietly corrected, and `reset` puts one
+back. `settings {}` is also the answer to "what machine am I on" when a measurement disagrees
+with what you expected: several of these used to be fixed in the source, where nothing could
+see them.
 
 ## Write a routine and watch it run
 
@@ -309,6 +349,80 @@ screenshot {"path": "/tmp/effect.png", "border": false, "scale": 2}
 `screen_text` decodes the screen to text via the ROM font, which is fine for menus and BASIC
 listings, but it is a decode - for anything graphical trust `screenshot`, which is the real
 frame buffer.
+
+`screen_text` and `screen_attrs` read the page the ULA is showing and report it as
+`page_on_air`. That is the answer you want by default. `read_memory` at `$5800` is not the
+same question and will disagree the moment a program flips screens, because bank 5 stays
+mapped at `$4000` whatever the ULA is drawing.
+
+```jsonc
+screen_attrs {}            → {"page": 7, "page_on_air": 7, "attributes": "28 28 ..."}
+screen_attrs {"page": 5}   → {"page": 5, "page_on_air": 7, "attributes": "38 38 ..."}
+```
+
+## Look at a gigascreen, or anything that flickers on purpose
+
+A gigascreen alternates two pictures every interrupt and means them to be seen as one. The
+colour it is after is in neither frame - it is what the eye makes of the two. A plain
+screenshot catches one of them, so what comes back is half the effect and looks like a bug
+that is not there.
+
+```jsonc
+run_frames {"count": 50}
+screenshot {"blend": 2, "border": false, "path": "/tmp/mix.png"}
+→ {"blend": {"frames": 2, "frames_used": 2, "distinct_frames": 2,
+             "gamma": 2.2, "pattern": "flicker"}}
+```
+
+`blend: 2` for a gigascreen, `3` for a three-frame effect. `video_config {"blend": 2}` makes
+it the default for every later screenshot, digest and recording.
+
+**Read `pattern` before believing the picture.** It says what the recent frames are actually
+doing, and only one of the three answers means blending was the right thing:
+
+- **`flicker`** - two pictures alternating, each frame equal to the one two before it. This is
+  what blend is for, and the result is the picture a person watching the screen sees.
+- **`animation`** - every frame differs from both of the last two. The effect is not
+  flickering, it is moving, and averaging those frames is motion blur. The reply says so.
+- **`still`** - nothing is changing, so the blend returns the frame unaltered.
+
+`distinct_frames` is the other number to read. If it is 1, the frames that went into the blend
+were identical: the effect holds each picture for more than one interrupt, so blending two of
+them mixes duplicates and nothing appears to mix. `frame_cost` says how many interrupts the
+effect really takes, and that number is the `blend` to use.
+
+The mixing happens in linear light rather than on the sRGB bytes, which is why black
+alternating with white comes out `#B6B6B6` and not the `#808080` that averaging the encoded
+values gives. `video_config {"gamma": 2.4}` changes that transfer; `gamma: 1` averages the
+bytes, which is the naive result and visibly too dark.
+
+The frame history is dropped whenever the frames on either side of it would belong to
+different programs - a load, a reset, a change of geometry - so a blend can never mix one
+program's picture with another's.
+
+To check that the *mixed* picture is stable, hash the mix:
+
+```jsonc
+frame_digest {"frames": 8, "border": false}              // alternates between two digests forever
+frame_digest {"frames": 8, "border": false, "blend": 2}  // one digest, or the effect drifted
+```
+
+The raw digest of a flickering effect changes every frame by design and proves nothing. The
+blended one is the picture a person sees, so a change in it is a change worth looking at.
+
+`record_video {"blend": 2}` records the same way - a clip of the effect instead of a clip of
+the flicker.
+
+When the two pictures live in the two screen pages rather than in one, `beam_position` says
+which is on air as `screen_page`, and `page` reads either one. That separates a question the
+blended picture cannot answer - whether both halves are being drawn correctly - from whether
+they combine into the right colour.
+
+```jsonc
+beam_position {}           → {"screen_page": 7, ...}
+screen_attrs {"page": 5}   // the half being built
+screen_attrs {"page": 7}   // the half on screen
+```
 
 ## Record a clip
 

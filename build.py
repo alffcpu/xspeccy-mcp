@@ -275,6 +275,20 @@ def resolve_path(root: Path, value: Path) -> Path:
     return value.resolve() if value.is_absolute() else (root / value).resolve()
 
 
+def find_unit_executable(build_dir):
+    """The unit test binary, wherever this generator decided to put it.
+
+    Returns None rather than raising: XSP_UNIT_TESTS can be off, and a build
+    without unit tests is a build, not a failure.
+    """
+    names = ["xspeccy-unit", "xspeccy-unit.exe"]
+    for name in names:
+        for candidate in (build_dir / name, build_dir / "Release" / name):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def find_executable(build_dir: Path) -> Path:
     filename = "xspeccy-mcp.exe" if os.name == "nt" else "xspeccy-mcp"
     candidates = [
@@ -412,6 +426,28 @@ def main() -> int:
     print("Built " + str(executable), flush=True)
 
     if args.smoke:
+        # The unit tests come first, and not only because they are quicker. They
+        # cover the pure logic underneath the server - colour arithmetic, the
+        # bank map, the listing lookups - which the end-to-end suite exercises
+        # without being able to see: reverse the frame history and smoke.sh
+        # still passes every one of its checks, because a two-frame blend is the
+        # same colour either way round. When both fail, the unit failure is the
+        # one that names the function.
+        #
+        # The target is EXCLUDE_FROM_ALL, so it is built here rather than by the
+        # main build above. A missing binary is not an error: the tests can be
+        # switched off with -DXSP_UNIT_TESTS=OFF and that is a legitimate build.
+        run(
+            [args.cmake, "--build", build_dir, "--config", "Release",
+             "--target", "xspeccy-unit", "--parallel", args.jobs],
+            root,
+        )
+        unit = find_unit_executable(build_dir)
+        if unit is not None:
+            run([str(unit)], root)
+        else:
+            print("unit test binary not built, skipping", flush=True)
+
         # The suite is a bash script on every platform, including Windows, where
         # Git Bash and the MSYS2 shell both provide one. It takes the binary as
         # its argument, so the build directory does not have to be the default.

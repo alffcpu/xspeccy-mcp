@@ -9,6 +9,12 @@ if(NOT EXISTS "${XSP_VERSIONS_FILE}")
 		"the CMake build and build.py read it.")
 endif()
 
+# Editing VERSIONS has to re-run CMake. Without this, `cmake --build` after a
+# version bump relinks the old number in silence, and the binary reports a
+# version that is not the one in the file it is supposed to come from - which
+# was the whole point of having one file.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${XSP_VERSIONS_FILE}")
+
 # KEY = VALUE, # starts a comment. Deliberately dull to parse: this file is read
 # by Python as well, and a format only one of them understands is a format that
 # will be edited wrongly.

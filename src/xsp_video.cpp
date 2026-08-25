@@ -1,5 +1,7 @@
 #include "xsp_video.h"
 
+#include "xsp_blend.h"
+
 #include <cstring>
 #include <vector>
 
@@ -14,8 +16,14 @@ void applyGeometry(Computer* comp) {
 	// MainWin::updateWindow(), non-OpenGL path: bytesPerLine = window width * 4
 	bytesPerLine = comp->vid->vsze.x * 4;
 	bufSize = bytesPerLine * comp->vid->vsze.y;
-	greyScale = 0;
+	// Upstream's own antiflicker stays off for good: it blends destructively
+	// into the buffer a screenshot and a digest both read, and history-dependent
+	// pixels in the picture we call ground truth is not a trade worth making.
+	// Blending happens on a copy instead - see xsp_blend.h.
 	noflic = 0;
+	// greyScale is left alone: it is a setting video_config owns, and a layout
+	// change is no reason to undo what the caller asked for.
+	blend::clear();		// frames drawn with the old geometry cannot be blended
 }
 
 // Which part of the frame buffer a capture covers. Shared so that a digest and
@@ -48,7 +56,38 @@ Rect cropRect(Computer* comp, bool border) {
 
 } // namespace
 
-Shot capture(Computer* comp, bool border, int scale) {
+// The frames a capture is made of, newest first. Normally the last completed
+// frame alone; with blending, that one and the ones before it.
+//
+// bufimg holds the last completed frame and scrimg the one being drawn, so the
+// history's newest entry and bufimg are the same picture - the history is read
+// for all of them, and bufimg is the fallback for when it is empty or off.
+namespace {
+
+std::vector<const unsigned char*> sources(int blendFrames, BlendInfo* info) {
+	if (blendFrames < 0) blendFrames = blend::defaults().frames;
+	if (blendFrames < 1) blendFrames = 1;
+	if (blendFrames > blend::kMaxHistory) blendFrames = blend::kMaxHistory;
+
+	std::vector<const unsigned char*> src;
+	if (blendFrames > 1) src = blend::history(blendFrames);
+	if (src.empty()) src.push_back(bufimg);
+
+	if (info) {
+		info->frames = blendFrames;
+		info->used = (int)src.size();
+		info->gamma = blend::defaults().gamma;
+		info->on = src.size() > 1;
+		info->distinct = info->on ? blend::distinctCount(src, (size_t)bufSize)
+					  : (int)src.size();
+		info->pattern = blend::patternName(blend::pattern((size_t)bufSize));
+	}
+	return src;
+}
+
+} // namespace
+
+Shot capture(Computer* comp, bool border, int scale, int blendFrames, BlendInfo* info) {
 	Shot shot;
 	const Rect rc = cropRect(comp, border);
 	const int x0 = rc.x, y0 = rc.y, w = rc.w, h = rc.h;
@@ -57,14 +96,17 @@ Shot capture(Computer* comp, bool border, int scale) {
 	if (scale < 1) scale = 1;
 	if (scale > 8) scale = 8;
 
+	std::vector<unsigned char> flat;		// w*h, one frame or the average
+	blend::mixRect(sources(blendFrames, info), blend::defaults().gamma,
+		       bytesPerLine, x0, y0, w, h, flat);
+	if (flat.empty()) return shot;
+
 	shot.width = w * scale;
 	shot.height = h * scale;
 	shot.rgba.resize((size_t)shot.width * shot.height * 4);
 
-	// bufimg holds the last completed frame; scrimg is the one being drawn
-	const unsigned char* src = bufimg;
 	for (int y = 0; y < h; y++) {
-		const unsigned char* srow = src + (size_t)(y0 + y) * bytesPerLine + (size_t)x0 * 4;
+		const unsigned char* srow = flat.data() + (size_t)y * w * 4;
 		for (int sy = 0; sy < scale; sy++) {
 			unsigned char* drow = shot.rgba.data()
 				+ ((size_t)(y * scale + sy) * shot.width) * 4;
@@ -78,6 +120,12 @@ Shot capture(Computer* comp, bool border, int scale) {
 	return shot;
 }
 
+void historyPush(Computer*) {
+	if (bufSize > 0) blend::push(bufimg, (size_t)bufSize);
+}
+
+void historyClear() { blend::clear(); }
+
 // ZX screen address of the pixel row `line` (0..191)
 static int scrLineAddr(int base, int line) {
 	int third = line >> 6;
@@ -86,7 +134,21 @@ static int scrLineAddr(int base, int line) {
 	return base + (third << 11) + (sub << 8) + (row << 5);
 }
 
-std::string screenText(Computer* comp) {
+int displayedPage(Computer* comp) {
+	return comp->vid->vidPage;
+}
+
+// The ULA's own read, copied from vid_mrd_cb in spectrum.c rather than invented:
+// ramData indexed by MADR(page,adr) and masked with ramMask. Going through
+// memRd() instead would be wrong, because that is the CPU's view - on a 128K
+// bank 5 is always the one mapped at $4000, so a program showing bank 7 would
+// still be reported as bank 5, which is the screen nobody is looking at.
+int screenByte(Computer* comp, int page, int adr) {
+	const int a = ((page & 0xff) << 14) + (adr & 0x3fff);
+	return comp->mem->ramData[a & comp->mem->ramMask];
+}
+
+std::string screenText(Computer* comp, int page) {
 	// font base: CHARS (23606/$5C36) points at font-256
 	int chars = (memRd(comp->mem, 0x5c37) << 8) | memRd(comp->mem, 0x5c36);
 	int fontBase = (chars + 256) & 0xffff;
@@ -101,7 +163,7 @@ std::string screenText(Computer* comp) {
 		for (int col = 0; col < 32; col++) {
 			unsigned char cell[8];
 			for (int y = 0; y < 8; y++)
-				cell[y] = (unsigned char)memRd(comp->mem, scrLineAddr(0x4000, row * 8 + y) + col);
+				cell[y] = (unsigned char)screenByte(comp, page, scrLineAddr(0, row * 8 + y) + col);
 			char ch = '?';
 			bool blank = true;
 			for (int y = 0; y < 8; y++) if (cell[y]) blank = false;
@@ -254,21 +316,26 @@ std::string memoryDigest(Computer* comp, int from, int to, std::string& err) {
 	return md.hex().substr(0, 12);
 }
 
-FrameHash frameDigest(Computer* comp, bool border, bool perLine) {
+FrameHash frameDigest(Computer* comp, bool border, bool perLine,
+		      int blendFrames, BlendInfo* info) {
 	FrameHash out;
 	const Rect rc = cropRect(comp, border);
 	if (rc.w <= 0 || rc.h <= 0) return out;
 	out.width = rc.w;
 	out.height = rc.h;
 
-	// bufimg, the same last-completed frame a screenshot returns, so a digest
-	// and the PNG next to it describe one and the same picture
+	// the same pixels a screenshot with the same arguments would write, so the
+	// digest and the PNG next to it describe one and the same picture
+	std::vector<unsigned char> flat;
+	blend::mixRect(sources(blendFrames, info), blend::defaults().gamma,
+		       bytesPerLine, rc.x, rc.y, rc.w, rc.h, flat);
+	if (flat.empty()) return out;
+
 	const size_t rowBytes = (size_t)rc.w * 4;
 	Md5 whole;
 	if (perLine) out.lines.reserve((size_t)rc.h);
 	for (int y = 0; y < rc.h; y++) {
-		const unsigned char* row = bufimg + (size_t)(rc.y + y) * bytesPerLine
-					   + (size_t)rc.x * 4;
+		const unsigned char* row = flat.data() + (size_t)y * rowBytes;
 		whole.add(row, rowBytes);
 		if (perLine) {
 			Md5 line;
@@ -280,12 +347,12 @@ FrameHash frameDigest(Computer* comp, bool border, bool perLine) {
 	return out;
 }
 
-std::string screenAttrs(Computer* comp) {
+std::string screenAttrs(Computer* comp, int page) {
 	std::string out;
 	char buf[32];
 	for (int row = 0; row < 24; row++) {
 		for (int col = 0; col < 32; col++) {
-			int a = memRd(comp->mem, 0x5800 + row * 32 + col);
+			int a = screenByte(comp, page, 0x1800 + row * 32 + col);
 			snprintf(buf, sizeof(buf), "%02X ", a & 0xff);
 			out += buf;
 		}

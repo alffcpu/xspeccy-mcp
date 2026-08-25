@@ -6,10 +6,9 @@
 #   cmake -DXPECCY_SRC=/path/to/Xpeccy-0.6.20260804 ...
 #   XPECCY_SRC=/path/to/Xpeccy-0.6.20260804 cmake ...
 #
-# The oldest release that compiles is XPECCY_MINIMUM in VERSIONS: it reshaped
-# Computer's status bits into sysflag[], dropped the hwTab[] declaration and
-# stopped clearing the register bunch. Older trees fail to compile rather than
-# misbehave. XPECCY_VERSION there is the release actually built against, which
+# The oldest release that compiles is XPECCY_MINIMUM in VERSIONS: it renamed
+# Video.curscr to Video.vidPage, which the raster and screen tools read. Older
+# trees fail to compile rather than misbehave. XPECCY_VERSION there is the release actually built against, which
 # build.py reads as well; a tree that is not it still builds, with a warning
 # below. Both numbers are read from that file rather than written out again.
 
@@ -29,10 +28,17 @@ if(NOT XPECCY_SRC)
 	# "Newest first" is a sort of directory NAMES, so anything alphabetic wins
 	# over a version: Xpeccy-git and Xpeccy-win both sort after
 	# Xpeccy-0.6.20260804. Collect first, choose after.
+	# Same marker as the hard floor below, and it has to stay the same one: a
+	# tree this loop accepts is a tree the build will then try to compile, so a
+	# looser test here does not prevent the failure, it moves it somewhere that
+	# cannot explain itself. The marker is the ABSENCE of curscr and not the
+	# presence of the name that replaced it, because vidPage already existed in
+	# the older header as a byte inside the tsconf struct - testing for it
+	# accepts exactly the trees this is meant to reject.
 	foreach(_c ${_xp_candidates})
-		if(EXISTS "${_c}/src/libxpeccy/spectrum.h")
-			file(READ "${_c}/src/libxpeccy/spectrum.h" _xp_probe)
-			if(_xp_probe MATCHES "flgBRK")
+		if(EXISTS "${_c}/src/libxpeccy/video/video.h")
+			file(READ "${_c}/src/libxpeccy/video/video.h" _xp_probe)
+			if(NOT _xp_probe MATCHES "curscr")
 				list(APPEND _xp_usable "${_c}")
 			else()
 				# Too old to build against. Skipping it rather than picking it
@@ -81,25 +87,32 @@ if(NOT XPECCY_SRC OR NOT EXISTS "${XPECCY_SRC}/src/libxpeccy/spectrum.h")
 endif()
 
 # A tree too old to build against, caught here rather than as a screenful of C++
-# errors about members of Computer that no longer exist. flgBRK is the marker: it
-# arrived with XPECCY_MINIMUM, when the status bitfields became sysflag[] entries.
-file(READ "${XPECCY_SRC}/src/libxpeccy/spectrum.h" _xp_spectrum_h)
-if(NOT _xp_spectrum_h MATCHES "flgBRK")
+# errors about members that no longer exist. Video called the screen page field
+# curscr until XPECCY_MINIMUM renamed it to vidPage, and the raster and screen
+# tools read it. This is the stricter of the two floors this project has had -
+# the older one was flgBRK in spectrum.h, which arrived when Computer's status
+# bits became sysflag[] - so testing the newer marker alone is enough.
+#
+# The test is for the OLD name. vidPage is no marker at all: the older header
+# already had one, a byte inside the tsconf struct, so a build probing for it
+# accepts precisely the trees that will not compile.
+file(READ "${XPECCY_SRC}/src/libxpeccy/video/video.h" _xp_video_h)
+if(_xp_video_h MATCHES "curscr")
 	message(FATAL_ERROR
 		"Xpeccy at ${XPECCY_SRC} is too old.\n"
-		"${XSP_XPECCY_MINIMUM} is the oldest that compiles - the release that moved\n"
-		"Computer's status bits into sysflag[]. VERSIONS pins ${XSP_XPECCY_REQUIRED},\n"
+		"${XSP_XPECCY_MINIMUM} is the oldest that compiles - the release that renamed\n"
+		"Video.curscr to Video.vidPage. VERSIONS pins ${XSP_XPECCY_REQUIRED},\n"
 		"which is what this is built and tested against. Run python build.py to\n"
 		"fetch it.")
 endif()
-unset(_xp_spectrum_h)
+unset(_xp_video_h)
 
 set(XPECCY_SRC "${XPECCY_SRC}" CACHE PATH "Path to the Xpeccy source tree" FORCE)
 set(XPECCY_INC "${XPECCY_SRC}/src")
 message(STATUS "Xpeccy core: ${XPECCY_SRC}")
 
 # Which release this actually is, read off the directory name, and whether it is
-# the one VERSIONS pins. The flgBRK probe above is only a floor: it accepts the
+# the one VERSIONS pins. The curscr probe above is only a floor: it accepts the
 # pinned release and everything after it alike, so a newer tree left on disk is
 # otherwise picked up without a word. That is how a build stops matching the one
 # the tests were written against, and the failure it produces later looks like a

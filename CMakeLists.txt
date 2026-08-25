@@ -49,6 +49,8 @@ add_executable(xspeccy-mcp
 	src/xsp_audio.cpp
 	src/xsp_keyboard.cpp
 	src/xsp_machine.cpp
+	src/xsp_blend.cpp
+	src/xsp_settings.cpp
 	src/xsp_video.cpp
 	src/xsp_png.cpp
 	src/xsp_record.cpp
@@ -86,6 +88,53 @@ if(MSVC)
 	target_compile_options(xspeccy-mcp PRIVATE /W3)
 else()
 	target_compile_options(xspeccy-mcp PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# Unit tests. The end-to-end suite in tests/smoke.sh drives the finished server
+# over stdio, which is the right way to check that the parts are wired together
+# and a poor way to check the parts. These cover the pure logic underneath it:
+# the colour arithmetic, the 128K bank map, the listing lookups and the PNG
+# writer, none of which need an emulator to be running.
+#
+# Only the modules that do not touch Computer are linked, and that is deliberate
+# rather than convenient: it keeps the test binary honest about which code is
+# actually free of the core, and it builds in a second.
+option(XSP_UNIT_TESTS "Build the unit test binary" ON)
+if(XSP_UNIT_TESTS)
+	add_executable(xspeccy-unit EXCLUDE_FROM_ALL
+		tests/unit/unit.cpp
+		tests/unit/main.cpp
+		tests/unit/test_blend.cpp
+		tests/unit/test_labels.cpp
+		tests/unit/test_listing.cpp
+		tests/unit/test_png.cpp
+		src/xsp_blend.cpp
+		src/xsp_labels.cpp
+		src/xsp_listing.cpp
+		src/xsp_config.cpp
+		src/xsp_platform.cpp
+		src/xsp_png.cpp
+	)
+	# xsp_png.cpp declares writePng in xsp_video.h, which includes spectrum.h.
+	# That is a header dependency and not a link one: nothing here calls into
+	# the core, so the Xpeccy include path is enough and xpeccy_core is not
+	# linked. If that ever stops being true the link will say so.
+	target_include_directories(xspeccy-unit PRIVATE
+		"${CMAKE_SOURCE_DIR}/src"
+		"${CMAKE_SOURCE_DIR}/third_party/json"
+		"${XSP_GENERATED_DIR}"
+		"${XPECCY_SRC}/src"
+		"${XPECCY_SRC}/src/libxpeccy"
+		"${ZLIB_INCLUDE_DIRS}")
+	target_link_libraries(xspeccy-unit PRIVATE ${XSP_ZLIB})
+	if(MSVC)
+		target_compile_options(xspeccy-unit PRIVATE /W3)
+	else()
+		target_compile_options(xspeccy-unit PRIVATE -Wall -Wextra -Wno-unused-parameter)
+	endif()
+
+	enable_testing()
+	add_test(NAME unit COMMAND xspeccy-unit)
 endif()
 
 install(TARGETS xspeccy-mcp RUNTIME DESTINATION bin)

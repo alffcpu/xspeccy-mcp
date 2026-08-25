@@ -25,19 +25,31 @@ drive the emulator itself.
 An MCP server that lets AI agents run and inspect ZX Spectrum programs through the
 [Xpeccy](https://github.com/samstyle/Xpeccy) emulator core. Xpeccy is by SAM style.
 
-51 tools over one machine, driven from an agent: load a snapshot, tape or disk image, run and
+53 tools over one machine, driven from an agent: load a snapshot, tape or disk image, run and
 step, set breakpoints by address or by bank, read and write memory, assemble and disassemble,
 resolve labels and listing lines from sjasmplus output, profile a frame by T-states, count
 coverage, read the screen as text or attributes or a hash, capture PNG/GIF/MP4, and inspect
 the AY and the beeper. There is no window and no real-time throttle: it runs as fast as the
 host manages, and the same program produces the same screen digest every time.
 
-Three of those are for raster and multicolour code. `run_to_beam` runs until the beam reaches
+Several of those are for raster and multicolour code. `run_to_beam` runs until the beam reaches
 a given line and dot, instead of stopping at an address. `beam_log` logs the beam position
 every time a given address is executed, without stopping the machine, and reports how much it
 varies between frames. `frame_digest` hashes the frame as drawn on screen, optionally per
 scanline; `screen_digest` hashes screen memory, which does not change if only the raster
 timing drifts, so it cannot catch that. Every stop also reports the beam position.
+
+Two more are for pictures that are not meant to be looked at one frame at a time. A gigascreen
+or a flickering multicolour is two or three pictures alternating at 50Hz, and a single frame of
+one is half the picture: it looks like neither half, and judging it from a screenshot is how a
+working effect gets declared broken. `screenshot` and `frame_digest` take `blend`, which
+averages the last completed frames in linear light - the colour a person watching actually
+sees - and `video_config` makes that the default. On a machine with two screens the tools also
+know which of them the ULA is drawing, so `screen_attrs` describes the screen on air rather
+than whichever bank happens to be mapped at `$4000`.
+
+`settings` reports every emulator setting the server can change, where the current value came
+from and what changing it costs, and changes one for the session or for good.
 
 **Point your agent at [COOKBOOK.md](COOKBOOK.md) before it starts.** The tool descriptions say
 what each call does; the cookbook says which calls to make for a given question, in what order,
@@ -77,10 +89,12 @@ python build.py --generator "MinGW Makefiles"
 `--smoke` needs a `bash`; on Windows either the MSYS2 one or Git Bash will do. `ffmpeg` on
 the PATH is optional and only needed for MP4/WebM recording - PNG and GIF are built in.
 
-Tested on Linux (Debian bookworm, GCC 12) and Windows (MSYS2 MinGW-w64, GCC 16): both build
-warning-free and pass all 112 checks, with identical screen digests and the same hash for the
-emulator sources on either platform. macOS is implemented but has not been compiled - expect
-small fixes on first contact.
+There are two test suites. `tests/unit/` is 411 checks over the logic that needs no emulator -
+the colour arithmetic, the 128K bank map, the listing lookups, the PNG writer - and
+`tests/smoke.sh` is 135 checks that drive the built server over stdio exactly as an MCP client
+would. `--smoke` runs both, unit first, and `ctest` runs the unit suite on its own.
+
+Builds on Linux, macOS and Windows.
 
 The included `.mcp.json` already points at the built executable, so an agent working in a
 clone of this repository finds the server without being told where it is. The path in it has

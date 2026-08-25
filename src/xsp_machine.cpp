@@ -1,4 +1,6 @@
 #include "xsp_machine.h"
+
+#include "xsp_blend.h"
 #include "xsp_platform.h"
 #include "xsp_video.h"
 
@@ -294,6 +296,9 @@ bool Machine::init(std::string& err, const std::string& configDir) {
 	applyPalette();
 
 	compSetBaseFrq(m_comp, m_env.cpuFrq / 1e6);
+	// start keeping completed frames, so a blended screenshot works without
+	// having had to ask for it in advance
+	blend::setDepth(blend::defaults().history);
 	reset(RES_DEFAULT);
 	return true;
 }
@@ -477,6 +482,16 @@ void Machine::applyLayout(const Layout& lay) {
 	video::applyGeometry(m_comp);		// globals xgui would set (bytesPerLine etc.)
 }
 
+double Machine::borderSize() const { return m_comp->vid->brdsize; }
+
+void Machine::setBorderSize(double frac) {
+	if (frac < 0) frac = 0;
+	if (frac > 1) frac = 1;
+	m_comp->vid->brdsize = frac;
+	vid_upd_layout(m_comp->vid);
+	video::applyGeometry(m_comp);		// vsze moved, so the buffer geometry did
+}
+
 bool Machine::setLayout(const std::string& name, std::string& err) {
 	const Layout* lay = m_env.findLayout(name);
 	if (!lay) { err = "unknown geometry '" + name + "'"; return false; }
@@ -499,6 +514,9 @@ void Machine::applyPalette() {
 
 void Machine::reset(int mode) {
 	compReset(m_comp, mode);
+	// the frames before a reset belong to another program; blending across it
+	// would average two unrelated pictures
+	video::historyClear();
 	// compCreate/compReset leave the key matrix all-zero, which reads as "every
 	// key held down" - the GUI clears it via comp_kbd_release() and so must we.
 	kbdReleaseAll(m_comp->keyb);
@@ -549,6 +567,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 			c->flgFRM = 0;
 			r.frames++;
 			if (m_profile.on) m_profile.frames++;
+			video::historyPush(c);		// for blended captures
 			// the frame wrapped, so a target that was behind us is ahead again
 			if (beamLine >= 0) beamArmed = true;
 		}
@@ -619,6 +638,7 @@ RunResult Machine::step(int count) {
 			c->flgFRM = 0;
 			r.frames++;
 			if (m_profile.on) m_profile.frames++;
+			video::historyPush(c);
 		}
 	}
 	c->flgDBG = savedDebug;
@@ -685,6 +705,7 @@ FrameCost Machine::frameCost(int sync, long long maxInstructions, bool instrumen
 			c->flgFRM = 0;
 			fc.interrupts++;
 			if (instrument && m_profile.on) m_profile.frames++;
+			video::historyPush(c);
 		}
 
 		if (sync < 0) {
