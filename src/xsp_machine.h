@@ -160,7 +160,15 @@ struct FrameCost {
 
 class Machine {
 public:
+	Machine() = default;
 	~Machine();
+
+	// Owns a Computer and a CPU and frees both by hand, so a copy would free
+	// them twice. There is one machine per process and no reason to move one,
+	// which makes deleting the copy the whole answer rather than the first half
+	// of writing five functions nobody calls.
+	Machine(const Machine&) = delete;
+	Machine& operator=(const Machine&) = delete;
 
 	// create the machine and apply the emulator's own defaults; configDir
 	// overrides where Xpeccy's configuration is looked for

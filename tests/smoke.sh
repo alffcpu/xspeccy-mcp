@@ -200,9 +200,9 @@ LBL
 	echo '{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"machine_state","arguments":{}}}'
 	# labels the assembled block defines itself, backwards and forwards, and the
 	# names that must be refused rather than silently swallowed
-	echo '{"jsonrpc":"2.0","id":98,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["top: dec a","jr nz,top","call sub","jr done","sub: ret","done: jp top"]}}}'
-	echo '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["c: nop"]}}}'
-	echo '{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["dup: nop","dup: ret"]}}}'
+	echo '{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["top: dec a","jr nz,top","call sub","jr done","sub: ret","done: jp top"]}}}'
+	echo '{"jsonrpc":"2.0","id":102,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["c: nop"]}}}'
+	echo '{"jsonrpc":"2.0","id":103,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$9400","lines":["dup: nop","dup: ret"]}}}'
 	# A breakpoint on a bank that is not paged in at the time. Page 7 in, leave a
 	# nop sled in it, page it back out, arm 07:0000 - and it must fire only once
 	# the bank returns to the window. Armed against the CPU address instead, this
@@ -236,8 +236,8 @@ LBL
 	echo '{"jsonrpc":"2.0","id":122,"method":"tools/call","params":{"name":"write_memory","arguments":{"address":"$9603","hex":"FF"}}}'
 	echo '{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"screen_digest","arguments":{"frames":1,"from":"$9600","to":"$9607"}}}'
 	echo '{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"screen_digest","arguments":{"frames":1,"from":"$9600"}}}'
-	echo '{"jsonrpc":"2.0","id":114,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"ZX48K","boot_frames":0}}}'
-	echo '{"jsonrpc":"2.0","id":115,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"Pentagon","boot_frames":0}}}'
+	echo '{"jsonrpc":"2.0","id":125,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"ZX48K","boot_frames":0}}}'
+	echo '{"jsonrpc":"2.0","id":126,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"Pentagon","boot_frames":0}}}'
 	# Raster debugging. The fixture is our own border-flipping loop rather than
 	# the ROM: after a reset the ROM spends its first frames in the RAM test with
 	# interrupts off, so $0038 does not run and a log watching it stays empty for
@@ -309,8 +309,26 @@ LBL
 	echo '{"jsonrpc":"2.0","id":140,"method":"tools/call","params":{"name":"tape","arguments":{"action":"rewind","block":5}}}'
 	echo '{"jsonrpc":"2.0","id":141,"method":"tools/call","params":{"name":"tape","arguments":{"action":"rewind","block":0}}}'
 	echo '{"jsonrpc":"2.0","id":142,"method":"tools/call","params":{"name":"get_registers","arguments":{}}}'
+	# A budget that turns the loop off rather than shortening it. execLoop reads
+	# a negative maximum as no maximum, so this used to be a call that never
+	# came back, and a reviewer trying one negative number found it before we
+	# did. Both budget arguments, because they are read in different places.
+	echo '{"jsonrpc":"2.0","id":200,"method":"tools/call","params":{"name":"screen_digest","arguments":{"skip_until":"$FFF0","skip_max_instructions":-1}}}'
+	echo '{"jsonrpc":"2.0","id":201,"method":"tools/call","params":{"name":"frame_cost","arguments":{"max_instructions":-1}}}'
+	echo '{"jsonrpc":"2.0","id":202,"method":"tools/call","params":{"name":"trace","arguments":{"action":"dump","count":1048576}}}'
+	# Requests that are valid JSON and not valid JSON-RPC. Reading a field off
+	# the wrong shape throws, and a throw used to reach the read loop, which
+	# logged it and sent nothing - leaving a client that had sent an id waiting
+	# for an answer that was never coming.
+	echo '[1,2]'
+	echo '42'
+	echo '{"jsonrpc":"2.0","id":203,"method":5}'
+	echo '{"jsonrpc":"2.0","id":204,"method":"tools/call","params":"nonsense"}'
+	echo '{"jsonrpc":"2.0","id":205,"method":"tools/call","params":{"name":5}}'
+	# and the stream carries on afterwards
 	echo '{"jsonrpc":"2.0","id":44,"method":"ping"}'
 } | "$BIN" --config "$(native "$CFG")" > "$OUT" 2>"$ERR"
+SERVER_RC=${PIPESTATUS[1]}
 
 fail=0
 check() {	# check <label> <jq-ish grep pattern>
@@ -318,6 +336,27 @@ check() {	# check <label> <jq-ish grep pattern>
 		echo "  ok   $1"
 	else
 		echo "  FAIL $1"
+		fail=1
+	fi
+}
+
+# check() searches the whole transcript, which is enough when the pattern could
+# only have come from one answer and too little when it could not. This one
+# looks inside the reply to one request, so "the machine survived that" cannot
+# be satisfied by an identical-looking answer from earlier in the session.
+# Replies are one object per line and nlohmann sorts the keys, so the id is
+# always "id":N followed by a comma.
+check_id() {	# check_id <label> <request id> <pattern>
+	local line
+	line=$(grep "\"id\":$2," "$OUT" | head -1)
+	if [ -z "$line" ]; then
+		echo "  FAIL $1 (no reply to id $2)"
+		fail=1
+	elif printf '%s' "$line" | grep -q -e "$3"; then	# -e: a pattern may start with a dash
+		echo "  ok   $1"
+	else
+		echo "  FAIL $1"
+		printf '       %s\n' "$(printf '%s' "$line" | cut -c1-160)"
 		fail=1
 	fi
 }
@@ -411,7 +450,10 @@ check "memory digest sees a poke" '"digest\\": \\"1bc531b4312b'
 check "digest range halved" 'give both from and to'
 check "beta disk present" '"interface\\": \\"Beta Disk'
 check "bad model refused" 'not usable here'
-check "server survived"   '"model\\": \\"Pentagon'
+# Against the machine_state that follows the refused GameBoy, not against any
+# Pentagon in the transcript: the first reply of the session is also a Pentagon,
+# so the loose form of this check passed before the thing it tests even ran.
+check_id "server survived"   100 'Pentagon'
 
 # Settings. The report is the only way to ask what the machine is set to, and
 # every value has to say where it came from.
@@ -486,11 +528,24 @@ check "alive after bad args" '"id":142'
 # by now, and freeing one used to abort the process on the way out - after the
 # last answer, so nothing above notices. Only the allocator says so, and only on
 # a platform whose allocator checks.
-if grep -qE 'double free|corruption|Aborted|munmap_chunk' /tmp/xspeccy-smoke.err; then
+# $ERR, not a path nothing writes to. This check spent its whole life grepping
+# /tmp/xspeccy-smoke.err, which the suite has never created, so it passed
+# whatever the server did on the way out - the one thing it exists to catch.
+if grep -qE 'double free|corruption|Aborted|munmap_chunk|Segmentation' "$ERR"; then
 	echo "  FAIL the allocator complained on the way out"
+	sed -n '/double free\|corruption\|Aborted\|munmap_chunk\|Segmentation/p' "$ERR" | sed 's/^/       /' | head -3
 	fail=1
 else
 	echo "  ok   exits clean"
+fi
+
+# And the status itself. Answering every request is not the same as ending well:
+# a crash after the last reply leaves a full transcript behind.
+if [ "${SERVER_RC:-1}" = "0" ]; then
+	echo "  ok   server exited 0"
+else
+	echo "  FAIL server exited $SERVER_RC"
+	fail=1
 fi
 
 # screen_digest: the same screen must hash the same, a changed one must not.
@@ -551,8 +606,53 @@ else
 	fail=1
 fi
 
+# ---- budgets and malformed requests -----------------------------------------
+#
+# Both of these are things a reviewer finds by typing one wrong value, so they
+# are checked against the reply to that exact request rather than against the
+# transcript as a whole.
+check_id "negative skip budget refused"   200 "outside 1\.\."
+check_id "negative frame budget refused"  201 "outside 1\.\."
+check_id "oversized trace dump refused"   202 "outside 1\.\."
+check_id "non-string method refused"      203 "-32600"
+check_id "non-object params refused"      204 "-32602"
+check_id "tools/call without a name"      205 "params.name"
+check_id "the stream carried on"           44 '"result"'
+
+# ---- the command line ------------------------------------------------------
+#
+# Not the protocol, but the same class of mistake: a server started with a
+# misspelt option used to come up on a configuration nobody asked for and say
+# nothing about it. These are the only checks that run the binary without
+# speaking JSON to it.
+cli() {	# cli <label> <expected exit> <pattern> <args...>
+	local label="$1" want="$2" pattern="$3"; shift 3
+	local out rc
+	out=$("$BIN" "$@" 2>&1); rc=$?
+	if [ "$rc" = "$want" ] && printf '%s' "$out" | grep -q "$pattern"; then
+		echo "  ok   $label"
+	else
+		echo "  FAIL $label (exit $rc, wanted $want)"
+		printf '%s\n' "$out" | sed 's/^/       /' | head -3
+		fail=1
+	fi
+}
+
+echo
+cli "--version reports both versions" 0 "Xpeccy" --version
+cli "--help prints usage"             0 "usage:" --help
+cli "unknown option refused"          1 "unknown argument" --setings x
+cli "missing --config value refused"  1 "needs a directory" --config
+cli "unreadable --config refused"     1 "no such directory" --config "$TMPD/not-a-directory"
+cli "unreadable --settings refused"   1 "no such file" --settings "$TMPD/not-a-file.conf"
+
 echo
 echo "stderr:"; sed 's/^/  /' "$ERR"
 [ $fail -eq 0 ] && echo "SMOKE OK" || echo "SMOKE FAILED"
 echo "full log: $OUT"
+
+# The working files go; the transcript stays, because it is the thing anyone
+# reads after a failure. A suite that leaves a couple of hundred kilobytes of
+# PNG and GIF behind on every run is a suite that fills a laptop by the month.
+rm -rf "$TMPD"
 exit $fail

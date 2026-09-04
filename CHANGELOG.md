@@ -27,6 +27,132 @@ would silently redefine what "unchanged" means.
 Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a dated upstream tag and never
 `stable` or `minor`: both are moving pointers, and a name that moves is not a pin.
 
+## 1.3.1
+
+A stability release. No new tools, and no correct call answers differently.
+What changed is that a set of *incorrect* calls, which used to hang the server
+or be answered with something plausible, are now refused with a reason.
+
+Built and tested against Xpeccy `0.6.20260820`, the same as 1.3.0.
+
+### Calls that never came back
+
+`execLoop` reads `maxInstructions >= 0` as the test for having a budget at all,
+so a negative number did not shorten the budget - it switched it off. Two
+arguments reached it unchecked:
+
+- `skip_max_instructions`, taken by `record_video`, `screen_digest`,
+  `frame_digest` and `frame_cost` through `skip_until`
+- `max_instructions` on `run_to_line`
+
+Either of them set to a negative value, with a target the program never reaches,
+ran until the process was killed. Four neighbouring budgets had been bounded
+already and these two were missed. Every budget and every output size now has a
+range, and the suite sends the values that used to hang it.
+
+### Requests that got no reply at all
+
+A request that was valid JSON but not a valid JSON-RPC message made the server
+read a field off the wrong kind of value. That throws rather than defaulting,
+and the throw reached the read loop, which logged it and sent nothing - so a
+client that had sent an `id` waited for an answer that was never coming. A
+top-level array or number, a non-string `method`, a `params` that is not an
+object, and a `tools/call` whose `name` is not a string each did it.
+
+All of them are answered now, with `-32600` or `-32602` and the `id` the client
+sent. The protocol version in `initialize` is negotiated against the revisions
+this server has been checked against rather than echoed back unread.
+
+### Answers that were wrong rather than missing
+
+- `read_memory` accepted an address past `$FFFF`, read the wrapped one, and
+  reported the number it had been given. The reply held the question and a
+  different question's answer at once.
+- `set_breakpoint` took any word as `access`. A typo like `"wrtie"` armed an
+  execution breakpoint, reported success and echoed the typo back, so the
+  breakpoint waited somewhere the caller was not watching.
+- `gamma: "2.2rubbish"` was read as 2.2. The settings parser refused the same
+  string, and the two disagreeing about the project's own rule meant one of them
+  was wrong.
+- An argument name a tool does not declare was ignored. `screen_text` with
+  `pages` instead of `page` returned whichever page was on air as if that had
+  been the question, and `read_memory` with `len` instead of `length` returned
+  sixteen bytes with nothing in the answer to say so. Refused now, with the
+  accepted names listed; the schemas say `additionalProperties: false`.
+- Seven arguments were documented as refused when out of range and were
+  silently clamped instead. Now refused.
+- `--config` pointing at a directory that is not there fell through to the
+  search order, and the server came up on whatever configuration the host
+  happened to have - a different machine from the one that was asked for. It is
+  an error now, and so is a missing `--settings` file and an unrecognised option.
+
+### Recording
+
+- The PNG, WAV and GIF writers asked `ferror()` and then closed without looking
+  at the result. `fclose` is where the buffered tail reaches the disk, so all
+  three could report a truncated file as a written one - and `record_video`
+  dropped the writer's verdict anyway.
+- `every_nth` had no upper bound. Past a few hundred the output rate falls under
+  one frame a second, which ffmpeg rounds to zero and which overflows the GIF's
+  16-bit frame delay. Now 1..1000.
+- Two servers recording with sound at the same time wrote over each other's
+  intermediate files, and neither found out. Those files carry the process id
+  now, and are deleted however the recording ends.
+- An error part-way through a recording left the audio capture running, so every
+  later execution went on filling it.
+- The sample buffer holds a minute of sound. Past that the soundtrack stops, and
+  because ffmpeg is told `-shortest` the picture was cut to match without a word.
+  Both `audio_capture` and `record_video` say so now.
+
+### Licensing
+
+`THIRD_PARTY_NOTICES.md` lists what a built binary contains that is not ours:
+the Xpeccy core, nlohmann/json, zlib, and the 16K ROM. The ROM is somebody
+else's copyright and is compiled in by default, because a tool nobody can use
+without one should work when it is copied to another machine. `-DXSP_BUILTIN_ROM=OFF`
+leaves it out, and the server then takes a ROM from the host.
+
+### Under the hood
+
+`src/xsp_mcp.cpp` was 3036 lines, 2354 of them a single `registerTools()`
+function holding every one of the fifty-three handlers as an anonymous lambda.
+It is now the protocol (`xsp_server`), the argument rules (`xsp_args`), the
+tools themselves (`src/tools/`, one file per subject), and an entry point that
+holds the command line and nothing else. `dispatch()` returns the reply rather
+than printing it, and `serve()` is the only thing that touches a stream, which
+is what made the protocol testable at all.
+
+The move itself was mechanical and was checked as one: at the commit that made
+it, every line of the registrations was byte-identical to its old self and the
+tool set, the schemas and the descriptions were unchanged. Everything above came
+afterwards, on top of it.
+
+The modules shared by the server and the tests are compiled once rather than
+once per target, and copy construction is deleted on the four classes that own
+something and free it by hand.
+
+### Tests
+
+The unit suite roughly quintupled and the end-to-end one grew by a sixth. New
+suites for the keyboard matrix, the platform layer, the configuration reader,
+the settings table against a real machine, the GIF recorder, the audio summary
+and WAV writer, the argument rules, and the JSON-RPC layer.
+
+`tools/coverage.py` builds an instrumented tree, runs both suites and reports
+lines, regions and branches per file, weakest first, failing below a floor. Line
+coverage went from the mid eighties to over ninety per cent and branch coverage
+from under sixty to over seventy; the figure moves with every commit, so the
+command is the claim rather than a number written down here.
+
+Three checks in the end-to-end suite could not fail: the server's exit status
+was never examined, one grepped a file nothing writes to, and one was satisfied
+by a reply from before the event it tests.
+
+Two things the tests found rather than confirmed: a `Computer` is 4.6 MB, so one
+on the stack overflows it, and a ZX48K reports 64K of memory because the core
+allocates RAM in powers of two. The first is fixed; the second is written down,
+because it looks like a bug and is not one.
+
 ## 1.3.0
 
 Seeing a picture that flickers on purpose, settings that were fixed in the source, and

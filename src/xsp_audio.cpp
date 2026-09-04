@@ -94,6 +94,7 @@ void Capture::start(int r, bool keepPcm, bool watchAy) {
 	ay = SourceEnergy();
 	gs = SourceEnergy();
 	pcm.clear();
+	pcm_truncated = false;
 	writes.clear();
 	lastRegValid = false;
 	on = true;
@@ -172,9 +173,15 @@ void tick(Computer* comp, Capture& cap, long long ns, int frame, int pc) {
 		if (cap.last_sign && sign != cap.last_sign) cap.zero_crossings++;
 		cap.last_sign = sign;
 
-		if (cap.keep_pcm && cap.pcm.size() < 2 * 44100 * 60) {	// cap at a minute
-			cap.pcm.push_back((int16_t)l);
-			cap.pcm.push_back((int16_t)r);
+		if (cap.keep_pcm) {
+			// Bounded in samples rather than seconds, so the limit in time
+			// depends on the rate: kMaxPcmSamples at 44100 is a minute.
+			if (cap.pcm.size() < kMaxPcmSamples) {
+				cap.pcm.push_back((int16_t)l);
+				cap.pcm.push_back((int16_t)r);
+			} else {
+				cap.pcm_truncated = true;
+			}
 		}
 		cap.samples++;
 	}
@@ -200,6 +207,7 @@ Summary summarize(const Capture& cap) {
 	s.raw_min = std::min(cap.min_l, cap.min_r);
 	s.raw_max = std::max(cap.max_l, cap.max_r);
 
+	s.truncated = cap.pcm_truncated;
 	s.beeper_rms = cap.beeper.rms();
 	s.ay_rms = cap.ay.rms();
 	s.gs_rms = cap.gs.rms();
@@ -261,8 +269,10 @@ bool writeWav(const std::string& path, const Capture& cap, std::string& err) {
 		if (s < -32768.0) s = -32768.0;
 		put16(f, (uint16_t)(int16_t)s);
 	}
+	// The close is where the last of the samples reach the disk, so it is where
+	// a failure to write them shows up.
 	bool ok = !ferror(f);
-	fclose(f);
+	if (fclose(f) != 0) ok = false;
 	if (!ok) err = "write error on '" + path + "'";
 	return ok;
 }

@@ -9,7 +9,7 @@
 
 # The server's own version, reported over MCP as serverInfo.version and by
 # --version. See CHANGELOG.md.
-XSPECCY_MCP_VERSION = 1.3.0
+XSPECCY_MCP_VERSION = 1.3.1
 
 # The Xpeccy release the server is built and tested against. This name is for
 # people; the pin that actually binds is XPECCY_COMMIT below.
@@ -30,8 +30,10 @@ XPECCY_COMMIT = d95018d359c780cd5325e0027495ce31fd97ec46
 #   0.6.20260804 reshaped Computer's status bits into sysflag[] (marker: flgBRK).
 #   0.6.20260820 renamed Video.curscr to Video.vidPage. beam_position and the
 #   screen_* tools read that field to say which screen page is on air, so a tree
-#   older than this one no longer compiles. The build probes for vidPage, which
-#   is the stricter of the two markers and therefore the only one worth testing.
+#   older than this one no longer compiles. The build tests for the ABSENCE of
+#   curscr rather than the presence of vidPage: the older header already carried
+#   a vidPage of its own inside tsconf, so looking for that name accepts exactly
+#   the trees it is meant to reject.
 #
 # XPECCY_VERSION can move forward without this following, and then the two say
 # different things - which is why the build reads both rather than repeating a

@@ -55,6 +55,32 @@ from and what changing it costs, and changes one for the session or for good.
 what each call does; the cookbook says which calls to make for a given question, in what order,
 and which of them answer questions that sound the same and are not.
 
+- **[docs/TOOLS.md](docs/TOOLS.md)** - every tool, its arguments and what it returns
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - how the emulator core is used without its
+  GUI, what that GUI had to be replaced with, the traps in the core worth knowing before
+  extending this, and how the whole thing is tested
+
+## How it fits together
+
+Xpeccy is a Qt application whose emulator core is not: `src/libxpeccy` is about 130 files of
+plain C with no Qt, no SDL and no OpenGL in any of them. This project links that core directly
+and reimplements the four things the GUI normally does around it - pick the hardware and clamp
+the RAM to what it supports, load the romset, set the video geometry, and fill the palette,
+without which every frame renders black.
+
+The upstream repository is never vendored and never patched. CMake compiles it from wherever
+its sources happen to be, `build.py` fetches them by commit rather than by tag - upstream
+publishes tags that move - and checks them against a SHA-256 of the sources themselves, taken
+over the files with line endings normalised so that a Windows checkout hashes the same as a
+Linux one. The pinned commit, the release it belongs to, the oldest release that still
+compiles and that hash all live in one file, [VERSIONS](VERSIONS), which the build and
+`build.py` both read.
+
+Inside, the JSON-RPC layer, the shared argument rules and the tools themselves are separate:
+`src/xsp_server.*` turns a request into a reply without touching a stream, `src/xsp_args.*`
+holds the rules every tool shares for reading a number, an address or a label, and
+`src/tools/` is one file per subject. `docs/ARCHITECTURE.md` has the rest.
+
 ## Build
 
 Requirements: Python 3, CMake 3.16+, a C++17 compiler, and zlib.
@@ -89,10 +115,28 @@ python build.py --generator "MinGW Makefiles"
 `--smoke` needs a `bash`; on Windows either the MSYS2 one or Git Bash will do. `ffmpeg` on
 the PATH is optional and only needed for MP4/WebM recording - PNG and GIF are built in.
 
-There are two test suites. `tests/unit/` is 411 checks over the logic that needs no emulator -
-the colour arithmetic, the 128K bank map, the listing lookups, the PNG writer - and
-`tests/smoke.sh` is 135 checks that drive the built server over stdio exactly as an MCP client
-would. `--smoke` runs both, unit first, and `ctest` runs the unit suite on its own.
+There are two test suites, and they answer different questions. `tests/smoke.sh` drives the
+built server over stdio exactly as an MCP client would, which is the only way to say the parts
+are wired together and a poor way to say whether any one of them is right: reverse the order of
+the frame history and every one of its checks still passes, because a two-frame blend is the
+same colour either way round. `tests/unit/` is where that gets caught - the colour arithmetic,
+the 128K bank map, the listing lookups, the PNG and GIF writers, the keyboard matrix, the
+settings table applied to a real machine, the argument rules and the JSON-RPC layer. Some of it
+is written against formats nothing else validates: the GIF suite decodes what the recorder
+wrote, LZW and growing code widths included, and compares the pixels back to the ones that went
+in.
+
+`--smoke` runs both, unit first, and `ctest` runs the unit suite on its own.
+
+`python3 tools/coverage.py` builds an instrumented tree, runs both suites and reports how much
+of the source they reach, per file, weakest first, failing below a floor. Neither suite alone
+answers that, which is why nothing added them up before it existed.
+
+```
+TOTAL                       91.6%    71.1%    83.1%    92.8%   (6414/7002 lines)
+```
+
+That is one run on one commit; the command is the claim rather than the number.
 
 Builds on Linux, macOS and Windows.
 
@@ -109,10 +153,33 @@ geometry. Point it at that directory with `--config <dir>` (on Windows the confi
 lives next to `xpeccy.exe`). Without one it boots a Pentagon 128K from a ROM compiled into
 the binary, so it works on a machine that has never seen Xpeccy.
 
+## What it does not do
+
+Writing files into a TR-DOS disk image, RZX playback, breakpoint conditions (`A == 5`) and
+watch expressions.
+
+`list_models` reports every machine the emulator core knows, which is more than this server
+can run. Of the non-ZX ones, `MSX`, `MSX2` and `IBM PC` load and run, though no tool here
+knows anything about their hardware. `GameBoy`, `NES`, `Commodore64`, `BK0010`, `BK0011M`,
+`Specialist` and `PC-9801` are refused with a reason, and `machine_config` leaves the previous
+machine running rather than taking the server down with it. The first six leave the hardware
+table's IO handlers null while the CPU type comes from the profile, so headless they run on a
+Z80 and the first `OUT` is a jump through a null pointer; the PC-9801's IO handlers print
+unhandled ports straight to stdout, which here is the JSON-RPC stream.
+
+Recording with sound holds a minute of audio. Past that the soundtrack stops and the picture
+is cut to match, and the answer says so.
+
 ## License
 
-This project is released under the MIT License; see [LICENSE](LICENSE). It includes
-[nlohmann/json](https://github.com/nlohmann/json), also under the MIT License
-([notice](third_party/json/LICENSE.MIT)). [Xpeccy](https://github.com/samstyle/Xpeccy) is
-downloaded at build time and remains under its upstream MIT License and copyright notice
-for SAM style.
+This project is released under the MIT License; see [LICENSE](LICENSE).
+
+A built binary contains more than this repository's code, and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) says what:
+[Xpeccy](https://github.com/samstyle/Xpeccy), downloaded at build time and statically linked,
+under its upstream MIT License and copyright notice for SAM style;
+[nlohmann/json](https://github.com/nlohmann/json), also MIT
+([notice](third_party/json/LICENSE.MIT)); zlib; and the 16K ZX Spectrum ROM, which is
+somebody else's copyright and is compiled in by default so that a copied executable can still
+boot a machine. Build with `-DXSP_BUILTIN_ROM=OFF` to leave the ROM out, and the server will
+take one from the host instead.

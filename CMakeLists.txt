@@ -41,7 +41,9 @@ if(XSP_STATIC AND NOT MSVC AND CMAKE_VERSION VERSION_LESS 3.24)
 	endif()
 endif()
 
-add_executable(xspeccy-mcp
+# The modules under src/ are the parts; src/tools/ is one file per group of
+# tools, all of them registered through src/xsp_server.cpp.
+set(XSP_CORE_SOURCES
 	src/xsp_platform.cpp
 	src/xsp_config.cpp
 	src/xsp_labels.cpp
@@ -54,16 +56,38 @@ add_executable(xspeccy-mcp
 	src/xsp_video.cpp
 	src/xsp_png.cpp
 	src/xsp_record.cpp
-	src/xsp_mcp.cpp
+	src/xsp_args.cpp
+	src/xsp_server.cpp
 )
 
-target_include_directories(xspeccy-mcp PRIVATE
+set(XSP_TOOL_SOURCES
+	src/tools/common.cpp
+	src/tools/machine.cpp
+	src/tools/execution.cpp
+	src/tools/memory.cpp
+	src/tools/debug.cpp
+	src/tools/video.cpp
+	src/tools/source.cpp
+	src/tools/timing.cpp
+	src/tools/audio.cpp
+	src/tools/input.cpp
+	src/tools/media.cpp
+)
+
+# The parts, built once and linked into both the server and the test binary.
+# They used to be listed in both targets and compiled twice, which is a minute
+# of everyone's time per clean build and two places to forget a file.
+add_library(xsp_core OBJECT ${XSP_CORE_SOURCES})
+
+target_include_directories(xsp_core PUBLIC
 	"${CMAKE_SOURCE_DIR}/src"
 	"${CMAKE_SOURCE_DIR}/third_party/json"
 	"${XSP_GENERATED_DIR}"
+	"${XPECCY_SRC}/src"
+	"${XPECCY_SRC}/src/libxpeccy"
 	"${ZLIB_INCLUDE_DIRS}")
 
-target_compile_definitions(xspeccy-mcp PRIVATE
+target_compile_definitions(xsp_core PUBLIC
 	XSP_XPECCY_SRC="${XPECCY_SRC}"
 	XSP_VERSION="${XSP_VERSION}"
 	# What the build actually used, which is not always what VERSIONS asks for:
@@ -72,7 +96,19 @@ target_compile_definitions(xspeccy-mcp PRIVATE
 	XSP_XPECCY_VERSION="${XSP_XPECCY_FOUND_VERSION}"
 	XSP_XPECCY_REQUIRED="${XSP_XPECCY_REQUIRED}")
 
-target_link_libraries(xspeccy-mcp PRIVATE xpeccy_core ${XSP_ZLIB} ${CMAKE_DL_LIBS})
+if(MSVC)
+	target_compile_options(xsp_core PRIVATE /W3)
+else()
+	target_compile_options(xsp_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+add_executable(xspeccy-mcp
+	${XSP_TOOL_SOURCES}
+	src/xsp_mcp.cpp
+	$<TARGET_OBJECTS:xsp_core>
+)
+
+target_link_libraries(xspeccy-mcp PRIVATE xsp_core xpeccy_core ${XSP_ZLIB} ${CMAKE_DL_LIBS})
 
 if(XSP_STATIC AND NOT MSVC)
 	target_link_options(xspeccy-mcp PRIVATE -static -static-libgcc -static-libstdc++)
@@ -92,46 +128,76 @@ endif()
 
 # Unit tests. The end-to-end suite in tests/smoke.sh drives the finished server
 # over stdio, which is the right way to check that the parts are wired together
-# and a poor way to check the parts. These cover the pure logic underneath it:
-# the colour arithmetic, the 128K bank map, the listing lookups and the PNG
-# writer, none of which need an emulator to be running.
+# and a poor way to check the parts. These cover the logic underneath it: the
+# colour arithmetic, the 128K bank map, the listing lookups, the PNG and GIF
+# writers, the keyboard matrix, the settings table and the configuration reader.
 #
-# Only the modules that do not touch Computer are linked, and that is deliberate
-# rather than convenient: it keeps the test binary honest about which code is
-# actually free of the core, and it builds in a second.
+# Every module in XSP_CORE_SOURCES is linked; only src/xsp_mcp.cpp and the tool
+# registrations are left out, the first because it owns main() and the second
+# because registering every tool would pull the whole emulator into a binary
+# meant to test the parts underneath it. An earlier version linked just the modules that never mention Computer,
+# which made a tidy claim and a bad test set: it left the keyboard map, the WAV
+# writer and the whole settings table untestable for a reason that had nothing to
+# do with how much they were worth testing. tools/coverage.py measures what is
+# actually reached, which is the honest version of the same question.
 option(XSP_UNIT_TESTS "Build the unit test binary" ON)
 if(XSP_UNIT_TESTS)
 	add_executable(xspeccy-unit EXCLUDE_FROM_ALL
+		$<TARGET_OBJECTS:xsp_core>
 		tests/unit/unit.cpp
 		tests/unit/main.cpp
+		tests/unit/test_args.cpp
+		tests/unit/test_audio.cpp
 		tests/unit/test_blend.cpp
+		tests/unit/test_config.cpp
+		tests/unit/test_gif.cpp
+		tests/unit/test_keyboard.cpp
 		tests/unit/test_labels.cpp
 		tests/unit/test_listing.cpp
+		tests/unit/test_machine.cpp
+		tests/unit/test_platform.cpp
 		tests/unit/test_png.cpp
-		src/xsp_blend.cpp
-		src/xsp_labels.cpp
-		src/xsp_listing.cpp
-		src/xsp_config.cpp
-		src/xsp_platform.cpp
-		src/xsp_png.cpp
+		tests/unit/test_server.cpp
+		tests/unit/test_settings.cpp
 	)
-	# xsp_png.cpp declares writePng in xsp_video.h, which includes spectrum.h.
-	# That is a header dependency and not a link one: nothing here calls into
-	# the core, so the Xpeccy include path is enough and xpeccy_core is not
-	# linked. If that ever stops being true the link will say so.
-	target_include_directories(xspeccy-unit PRIVATE
-		"${CMAKE_SOURCE_DIR}/src"
-		"${CMAKE_SOURCE_DIR}/third_party/json"
-		"${XSP_GENERATED_DIR}"
-		"${XPECCY_SRC}/src"
-		"${XPECCY_SRC}/src/libxpeccy"
-		"${ZLIB_INCLUDE_DIRS}")
-	target_link_libraries(xspeccy-unit PRIVATE ${XSP_ZLIB})
+	target_link_libraries(xspeccy-unit PRIVATE xsp_core xpeccy_core ${XSP_ZLIB} ${CMAKE_DL_LIBS})
+	if(WIN32)
+		target_link_libraries(xspeccy-unit PRIVATE winmm)
+	else()
+		target_link_libraries(xspeccy-unit PRIVATE m)
+	endif()
 	if(MSVC)
 		target_compile_options(xspeccy-unit PRIVATE /W3)
 	else()
 		target_compile_options(xspeccy-unit PRIVATE -Wall -Wextra -Wno-unused-parameter)
 	endif()
+
+	# A test file that is on disk and not in the two lists above is a suite
+	# nobody runs, and it fails silently and forever: the build says nothing,
+	# the binary says nothing, and the coverage table just looks a little worse
+	# than it should. Adding one means editing three places - the sources here,
+	# the declaration in unit.h and the call in main.cpp - so the build checks
+	# that the first and the last were not forgotten.
+	#
+	# A glob is normally the wrong way to list sources, because CMake does not
+	# re-run when a file appears. Here it is not the list; it is the check on
+	# the list, and a stale glob only delays the complaint to the next configure.
+	file(GLOB _xsp_test_files RELATIVE "${CMAKE_SOURCE_DIR}" "tests/unit/test_*.cpp")
+	file(READ "${CMAKE_SOURCE_DIR}/tests/unit/main.cpp" _xsp_test_main)
+	get_target_property(_xsp_unit_sources xspeccy-unit SOURCES)
+	foreach(_test ${_xsp_test_files})
+		if(NOT "${_test}" IN_LIST _xsp_unit_sources)
+			message(FATAL_ERROR
+				"${_test} exists but is not in xspeccy-unit's sources: it would "
+				"never be compiled. Add it to CMakeLists.txt.")
+		endif()
+		get_filename_component(_suite "${_test}" NAME_WE)
+		if(NOT _xsp_test_main MATCHES "${_suite}\\(\\)")
+			message(FATAL_ERROR
+				"${_test} is compiled but ${_suite}() is never called from "
+				"tests/unit/main.cpp: it would never run.")
+		endif()
+	endforeach()
 
 	enable_testing()
 	add_test(NAME unit COMMAND xspeccy-unit)

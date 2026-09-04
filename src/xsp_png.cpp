@@ -68,8 +68,11 @@ bool writePng(const std::string& path, const unsigned char* rgba,
 	putChunk(f, "IDAT", comp.data(), comp.size());
 	putChunk(f, "IEND", nullptr, 0);
 
+	// fclose flushes, so a full disk fails there rather than in any of the
+	// writes above: asking ferror first and closing without looking would
+	// report a truncated file as a written one.
 	bool ok = !ferror(f);
-	fclose(f);
+	if (fclose(f) != 0) ok = false;
 	if (!ok) err = "write error on '" + path + "'";
 	return ok;
 }

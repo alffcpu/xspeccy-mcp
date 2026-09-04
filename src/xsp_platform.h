@@ -27,5 +27,10 @@ std::vector<std::string> xpeccyConfigCandidates();
 // JSON-RPC stream. No-op elsewhere.
 void setBinaryStdio();
 
+// This process, for naming scratch files. Two servers running out of the same
+// temporary directory otherwise write over each other's work, and the one that
+// loses does not find out.
+int processId();
+
 } // namespace platform
 } // namespace xsp

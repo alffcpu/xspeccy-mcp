@@ -20,7 +20,13 @@ namespace record {
 // than a short one.
 class GifWriter {
 public:
+	GifWriter() = default;
 	~GifWriter();
+
+	// Holds an open FILE*; a copy would close it twice and the second close is
+	// undefined rather than merely wrong.
+	GifWriter(const GifWriter&) = delete;
+	GifWriter& operator=(const GifWriter&) = delete;
 
 	// palette: up to 256 RGBA entries, normally comp->vid->pal
 	bool open(const std::string& path, int width, int height,
@@ -40,10 +46,22 @@ private:
 	long long m_bytes = 0;
 };
 
+// The colours a finished picture actually contains, as a GIF colour table.
+// Pure arithmetic over an RGBA buffer and nothing to do with the emulator, which
+// is why it sits beside the writer that consumes it rather than in the video
+// module. `exact` says whether every colour fitted: false means the table is the
+// 256 most used and the rest will be approximated.
+std::vector<uint32_t> picturePalette(const std::vector<unsigned char>& rgba, bool& exact);
+
 // A pipe into ffmpeg reading raw RGBA frames on stdin.
 class FfmpegWriter {
 public:
+	FfmpegWriter() = default;
 	~FfmpegWriter();
+
+	// Same reason as GifWriter, with a pipe instead of a file.
+	FfmpegWriter(const FfmpegWriter&) = delete;
+	FfmpegWriter& operator=(const FfmpegWriter&) = delete;
 
 	static bool available();
 	bool open(const std::string& path, int width, int height, int fps, std::string& err);

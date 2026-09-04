@@ -1,5 +1,8 @@
 #include "xsp_record.h"
 
+#include <algorithm>
+#include <map>
+
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -237,9 +240,38 @@ bool GifWriter::close() {
 	if (!m_file) return true;
 	fputc(0x3b, m_file);			// trailer
 	bool ok = !ferror(m_file);
-	fclose(m_file);
+	// Same reason as the PNG and WAV writers: the buffered tail of a long
+	// recording is written by fclose, and a failure there is the one most
+	// likely to happen, because that is where the file is at its largest.
+	if (fclose(m_file) != 0) ok = false;
 	m_file = nullptr;
 	return ok;
+}
+
+// The colours actually present in a picture, as a GIF global colour table.
+//
+// A raw ZX frame only ever holds palette entries, so the emulator's own palette
+// is exact. A blended frame does not: its colours are averages that are in no
+// palette by design, and handing GIF the ZX one would map every mixed colour
+// back to the nearest pure one - which is exactly the mixing the caller asked
+// to see, thrown away on the last step.
+std::vector<uint32_t> picturePalette(const std::vector<unsigned char>& rgba, bool& exact) {
+	std::map<uint32_t, int> count;
+	for (size_t i = 0; i + 3 < rgba.size(); i += 4)
+		count[(uint32_t)rgba[i] | ((uint32_t)rgba[i + 1] << 8) | ((uint32_t)rgba[i + 2] << 16)]++;
+	std::vector<std::pair<int, uint32_t>> byUse;
+	byUse.reserve(count.size());
+	for (const auto& kv : count) byUse.push_back({kv.second, kv.first});
+	exact = byUse.size() <= 256;
+	if (!exact)
+		std::sort(byUse.begin(), byUse.end(),
+			  [](const std::pair<int, uint32_t>& a, const std::pair<int, uint32_t>& b) {
+				  return a.first > b.first;
+			  });
+	std::vector<uint32_t> pal;
+	for (size_t i = 0; i < byUse.size() && i < 256; i++) pal.push_back(byUse[i].second);
+	if (pal.empty()) pal.push_back(0);
+	return pal;
 }
 
 // ---------------------------------------------------------------- ffmpeg

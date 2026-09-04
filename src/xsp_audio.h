@@ -59,6 +59,10 @@ struct SourceEnergy {
 	double rms() const;		// standard deviation = the part you can hear
 };
 
+// How many int16 samples the capture will hold. Stereo, so half that many
+// frames of sound: a minute at 44100, proportionally less at a higher rate.
+const size_t kMaxPcmSamples = 2 * 44100 * 60;
+
 // Rolling capture of the mixed output, filled from the execution loop.
 struct Capture {
 	bool on = false;
@@ -81,6 +85,11 @@ struct Capture {
 	SourceEnergy beeper, ay, gs;	// per-source breakdown (side-effect-free reads)
 
 	std::vector<int16_t> pcm;	// interleaved stereo, DC-removed and normalised
+	// The buffer is bounded, because a long recording would otherwise grow it
+	// without limit. Hitting the bound is not an error, but it is a fact the
+	// caller has to be told: the sound stops before the picture does, and
+	// anything that muxes the two together then cuts the picture to match.
+	bool pcm_truncated = false;
 
 	// AY register watching shares the capture's lifetime
 	bool watch = false;
@@ -107,6 +116,7 @@ struct Summary {
 	int raw_min = 0, raw_max = 0;
 	double beeper_rms = 0.0, ay_rms = 0.0, gs_rms = 0.0;
 	std::string dominant_source = "silence";
+	bool truncated = false;		// the sample buffer filled before the run ended
 };
 
 Summary summarize(const Capture& cap);

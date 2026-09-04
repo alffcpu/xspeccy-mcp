@@ -8,12 +8,15 @@
 	#include <direct.h>
 	#include <fcntl.h>
 	#include <io.h>
+	#include <process.h>
 	#ifndef S_ISDIR
 		#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 	#endif
 	#ifndef S_ISREG
 		#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
 	#endif
+#else
+	#include <unistd.h>
 #endif
 
 namespace xsp {
@@ -102,6 +105,14 @@ void setBinaryStdio() {
 #ifdef _WIN32
 	_setmode(_fileno(stdout), _O_BINARY);
 	_setmode(_fileno(stdin), _O_BINARY);
+#endif
+}
+
+int processId() {
+#ifdef _WIN32
+	return (int)_getpid();
+#else
+	return (int)getpid();
 #endif
 }
 
