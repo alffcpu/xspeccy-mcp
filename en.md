@@ -62,7 +62,7 @@ Instead of asking for "a nice fast effect", give the agent something concrete. F
 
 ## Connecting xspeccy-mcp
 
-You need to clone `xspeccy-mcp`, build it once, and connect it to the agent environment. The repository provides `python3 build.py --smoke` for this. It downloads a supported Xpeccy version, builds the server, and runs the tests. You can also point it at Xpeccy sources that are already present. On Windows the build needs MinGW-w64, not MSVC.
+You need to clone `xspeccy-mcp`, build it once, and connect it to the agent environment. The repository provides `python3 build.py --smoke` for this. It downloads the pinned xpeccy-plus source - the fork of Xpeccy the server is built against - builds the server, and runs the tests. You can also point it at xpeccy-plus sources that are already present; an upstream samstyle Xpeccy tree no longer compiles the server. On Windows the build needs MinGW-w64, not MSVC.
 
 Xpeccy changes over time, so it is better to use the version specified by the `xspeccy-mcp` repository. Moving to another version may require changes to the integration. An agent can study those changes, but the tests and a real project snapshot should be checked again afterwards.
 
