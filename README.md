@@ -4,8 +4,7 @@
 ![MCP](https://img.shields.io/badge/MCP-server-informational)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-This project is meant to be used by AI agents. It works with any agent that supports MCP,
-such as Claude Code or OpenAI Codex.
+This project is meant to be used by AI agents. It works with any agent that supports MCP.
 
 The simplest way to start is to give your agent a link to this repository and ask it to
 download the project, build it, check that the build works, and then use the xspeccy MCP
@@ -23,14 +22,18 @@ to plan the work, and how the usual edit, build, run and check loop changes once
 drive the emulator itself.
 
 An MCP server that lets AI agents run and inspect ZX Spectrum programs through the
-[Xpeccy](https://github.com/samstyle/Xpeccy) emulator core. Xpeccy is by SAM style.
+[xpeccy-plus](https://github.com/dotkoval/xpeccy-plus) emulator core - a fork of Xpeccy by
+SAM style that carries contended memory and I/O contention, machine definitions as data
+(`res/machines/*.conf`), and the TSConf and SD-card hardware.
 
-53 tools over one machine, driven from an agent: load a snapshot, tape or disk image, run and
-step, set breakpoints by address or by bank, read and write memory, assemble and disassemble,
-resolve labels and listing lines from sjasmplus output, profile a frame by T-states, count
-coverage, read the screen as text or attributes or a hash, capture PNG/GIF/MP4, and inspect
-the AY and the beeper. There is no window and no real-time throttle: it runs as fast as the
-host manages, and the same program produces the same screen digest every time.
+54 tools over one machine, driven from an agent: load a snapshot, tape or disk image
+(`.spg` snapshots and `.wav` tapes included), run and step, set breakpoints by address or
+by bank, read and write memory - a `bank:offset` read reaches a RAM bank that is not paged
+in - mount and lock an SD-card image, assemble and disassemble, resolve labels and listing
+lines from sjasmplus output, profile a frame by T-states, count coverage, read the screen
+as text or attributes or a hash, capture PNG/GIF/MP4, and inspect the AY and the beeper.
+There is no window and no real-time throttle: it runs as fast as the host manages, and the
+same program produces the same screen digest every time.
 
 Several of those are for raster and multicolour code. `run_to_beam` runs until the beam reaches
 a given line and dot, instead of stopping at an address. `beam_log` logs the beam position
@@ -62,19 +65,22 @@ and which of them answer questions that sound the same and are not.
 
 ## How it fits together
 
-Xpeccy is a Qt application whose emulator core is not: `src/libxpeccy` is about 130 files of
-plain C with no Qt, no SDL and no OpenGL in any of them. This project links that core directly
-and reimplements the four things the GUI normally does around it - pick the hardware and clamp
+Xpeccy is a Qt application whose emulator core is not: `src/libxpeccy` is about 130 files
+with no Qt, no SDL and no OpenGL in any of them. This project links that core directly and
+reimplements the four things the GUI normally does around it - pick the hardware and clamp
 the RAM to what it supports, load the romset, set the video geometry, and fill the palette,
-without which every frame renders black.
+without which every frame renders black. What a machine is comes from the fork's machine
+definitions - `res/machines/*.conf` declares its memory, contention, PSG chips, drives,
+ROMs and video timing - which this server parses and applies the way the GUI does, and
+which are compiled into the binary so a copied executable still knows its machines.
 
 The upstream repository is never vendored and never patched. CMake compiles it from wherever
-its sources happen to be, `build.py` fetches them by commit rather than by tag - upstream
-publishes tags that move - and checks them against a SHA-256 of the sources themselves, taken
-over the files with line endings normalised so that a Windows checkout hashes the same as a
-Linux one. The pinned commit, the release it belongs to, the oldest release that still
-compiles and that hash all live in one file, [VERSIONS](VERSIONS), which the build and
-`build.py` both read.
+its sources happen to be, `build.py` fetches them by commit rather than by tag - the fork's
+`nightly` tag is a moving pointer - and checks them against a SHA-256 of the sources
+themselves, taken over the files with line endings normalised so that a Windows checkout
+hashes the same as a Linux one. The pinned commit, the release it belongs to, the oldest
+release that still compiles and that hash all live in one file, [VERSIONS](VERSIONS), which
+the build and `build.py` both read.
 
 Inside, the JSON-RPC layer, the shared argument rules and the tools themselves are separate:
 `src/xsp_server.*` turns a request into a reply without touching a stream, `src/xsp_args.*`
@@ -93,13 +99,16 @@ The script downloads Xpeccy, configures the project, and builds `build/xspeccy-m
 (`build/xspeccy-mcp.exe` on Windows). Use `python3 build.py` when `python` is not the Python 3
 command.
 
-Which Xpeccy is pinned in [`VERSIONS`](VERSIONS) - the one file any version is written down
-in, read by both `build.py` and the CMake build. It is fetched **by commit** rather than by
-tag name, because upstream also publishes tags called `stable` and `minor` and both are moving
-pointers, and what arrives is checked against a hash of `src/libxpeccy` recorded there. A tree
-supplied with `--xpeccy-src` is checked too but only warned about, since pointing at a patched
-copy is a deliberate act. `xspeccy-mcp --version` reports the server version and the emulator
-release it was built against.
+Which xpeccy-plus release is pinned in [`VERSIONS`](VERSIONS) - the one file any version is
+written down in, read by both `build.py` and the CMake build. It is fetched **by commit**
+rather than by tag name, because a tag is a name that can move and a commit cannot, and what
+arrives is checked against a hash of the compiled sources and the runtime resources
+(`res/machines`, `res/layouts.conf`, `config/roms`) recorded there - those decide what a
+machine boots as, so they are pinned too. A tree supplied with `--xpeccy-src` is checked too
+but only warned about, since pointing at a patched copy is a deliberate act. A samstyle
+Xpeccy tree no longer builds this adapter: the fork's `comp_set_cont` is probed for at
+configure time. `xspeccy-mcp --version` reports the server version and the emulator release
+it was built against.
 
 **On Windows use MinGW-w64, not MSVC.** The emulator core is GNU C - upstream compiles it
 with `-std=gnu99` - so Visual Studio cannot build it, and CMake will pick Visual Studio by
@@ -133,7 +142,7 @@ of the source they reach, per file, weakest first, failing below a floor. Neithe
 answers that, which is why nothing added them up before it existed.
 
 ```
-TOTAL                       91.6%    71.1%    83.1%    92.8%   (6414/7002 lines)
+TOTAL                       91.8%    70.6%    82.4%    92.8%   (6368/6938 lines)
 ```
 
 That is one run on one commit; the command is the claim rather than the number.
@@ -150,8 +159,9 @@ over stdio, one message per line.
 The server reads the emulator's own configuration when it can find one, so "give me a
 Pentagon" produces the machine Xpeccy's GUI would boot - same romset, same RAM, same screen
 geometry. Point it at that directory with `--config <dir>` (on Windows the configuration
-lives next to `xpeccy.exe`). Without one it boots a Pentagon 128K from a ROM compiled into
-the binary, so it works on a machine that has never seen Xpeccy.
+lives next to `xpeccy.exe`). Without one it boots the shipped Pentagon machine definition -
+128K, the Pentagon ROMs with TR-DOS, Beta Disk and an AY - on ROMs compiled into the binary,
+so it works on a machine that has never seen Xpeccy.
 
 ## What it does not do
 
@@ -176,10 +186,11 @@ This project is released under the MIT License; see [LICENSE](LICENSE).
 
 A built binary contains more than this repository's code, and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) says what:
-[Xpeccy](https://github.com/samstyle/Xpeccy), downloaded at build time and statically linked,
-under its upstream MIT License and copyright notice for SAM style;
-[nlohmann/json](https://github.com/nlohmann/json), also MIT
-([notice](third_party/json/LICENSE.MIT)); zlib; and the 16K ZX Spectrum ROM, which is
-somebody else's copyright and is compiled in by default so that a copied executable can still
-boot a machine. Build with `-DXSP_BUILTIN_ROM=OFF` to leave the ROM out, and the server will
-take one from the host instead.
+[xpeccy-plus](https://github.com/dotkoval/xpeccy-plus), a fork of
+[Xpeccy](https://github.com/samstyle/Xpeccy) by SAM style, downloaded at build time and
+statically linked under its MIT License - its machine definitions, layouts and the ROM
+images it ships (about 1.8 MB, somebody else's copyright) are compiled in by default so a
+copied executable can still boot a machine; [nlohmann/json](https://github.com/nlohmann/json),
+also MIT ([notice](third_party/json/LICENSE.MIT)); and zlib. Build with
+`-DXSP_BUILTIN_ROM=OFF` to leave the ROMs out, and the server will take them from the
+host instead.

@@ -11,6 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(version)		# must precede xpeccy: it sets the version to check against
 include(xpeccy)
 include(builtin_rom)
+include(builtin_resources)	# after builtin_rom: it reads XSP_BUILTIN_ROM
 
 # A binary you can copy to another machine and run. On MinGW that means not
 # depending on the toolchain's DLLs (libgcc, libstdc++, zlib1), which live in the
@@ -77,7 +78,7 @@ set(XSP_TOOL_SOURCES
 # The parts, built once and linked into both the server and the test binary.
 # They used to be listed in both targets and compiled twice, which is a minute
 # of everyone's time per clean build and two places to forget a file.
-add_library(xsp_core OBJECT ${XSP_CORE_SOURCES})
+add_library(xsp_core OBJECT ${XSP_CORE_SOURCES} ${XSP_RESOURCE_SOURCES})
 
 target_include_directories(xsp_core PUBLIC
 	"${CMAKE_SOURCE_DIR}/src"
@@ -95,6 +96,12 @@ target_compile_definitions(xsp_core PUBLIC
 	# always say what it was built against, rather than it having to be inferred.
 	XSP_XPECCY_VERSION="${XSP_XPECCY_FOUND_VERSION}"
 	XSP_XPECCY_REQUIRED="${XSP_XPECCY_REQUIRED}")
+# The shipped roms are compiled in (cmake/builtin_resources.cmake). Without
+# this the server falls back to reading them from XSP_XPECCY_SRC at run time,
+# which is the one place that path is still allowed to matter.
+if(XSP_BUILTIN_ROM)
+	target_compile_definitions(xsp_core PUBLIC XSP_BUILTIN_ROMS=1)
+endif()
 
 if(MSVC)
 	target_compile_options(xsp_core PRIVATE /W3)
@@ -149,6 +156,7 @@ if(XSP_UNIT_TESTS)
 		tests/unit/test_args.cpp
 		tests/unit/test_audio.cpp
 		tests/unit/test_blend.cpp
+		tests/unit/test_builtin.cpp
 		tests/unit/test_config.cpp
 		tests/unit/test_gif.cpp
 		tests/unit/test_keyboard.cpp

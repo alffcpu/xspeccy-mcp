@@ -48,8 +48,9 @@ void registerTimingTools() {
 	     "the paper/border/blanking split, and how many T-states the last frame actually took. "
 	     "Budget an effect against t_states_per_frame and fps_real - the clock divided by the "
 	     "T-states in a frame, 48.83 Hz on a Pentagon rather than the round 50 it is usually "
-	     "quoted at. The ns_per_* fields are the core's internal quantum, which is a truncated "
-	     "integer; the *_real ones come from the CPU clock and are what a real machine does.",
+	     "quoted at. The ns_per_* fields are the core's internal quantum - a fractional "
+	     "ns per tick in this fork; the *_real ones come from the CPU clock and are what "
+	     "a real machine does.",
 	     json{},
 	     [](const json&) {
 		     Computer* c = mach().comp();
@@ -112,7 +113,6 @@ void registerTimingTools() {
 							  1, (int)kMaxInstructions);
 		     Computer* c = mach().comp();
 		     Timing tm = timing(c);
-		     const long long nsPerT = c->nsPerTick > 0 ? c->nsPerTick : 1;
 
 		     // land on a boundary first, so frame 1 is a whole frame. The
 		     // profiler must not see this one: it is a partial frame, and
@@ -128,8 +128,8 @@ void registerTimingTools() {
 		     for (int i = 0; i < frames; i++) {
 			     xsp::FrameCost fc = mach().frameCost(sync.pc, budget);
 			     if (!fc.complete) break;
-			     long long work = fc.work_ns / nsPerT;
-			     long long idle = fc.idle_ns / nsPerT;
+			     long long work = fc.work_t;
+			     long long idle = fc.idle_t;
 			     if (mn < 0 || work < mn) mn = work;
 			     if (work > mx) mx = work;
 			     sum += work;
@@ -147,7 +147,7 @@ void registerTimingTools() {
 			     {"sync", sync.text},
 			     {"frames", (int)list.size()},
 			     {"frame_list", list},
-			     {"alignment_t", align.work_ns / nsPerT},
+			     {"alignment_t", align.work_t},
 			     {"t_states_min", mn},
 			     {"t_states_max", mx},
 			     {"t_states_avg", (double)sum / (double)list.size()},
@@ -290,10 +290,8 @@ void registerTimingTools() {
 				     e["percent"] = 100.0 * pages[i].first / p.instructions;
 			     hot.push_back(e);
 		     }
-		     Computer* c = mach().comp();
-		     Timing tm = timing(c);
-		     const long long nsPerT = c->nsPerTick > 0 ? c->nsPerTick : 0;
-		     const long long totalT = nsPerT ? p.ns / nsPerT : 0;
+		     Timing tm = timing(mach().comp());
+		     const long long totalT = p.t;
 
 		     // symbols mode makes one region per label, most of them empty:
 		     // report the ones that ran, dearest first
@@ -303,7 +301,7 @@ void registerTimingTools() {
 		     if (bySymbols)
 			     std::sort(order.begin(), order.end(),
 				       [](const xsp::Profile::Range* x, const xsp::Profile::Range* y) {
-					       return x->ns > y->ns;
+					       return x->t > y->t;
 				       });
 		     const int maxRanges = argNumRange(a, "max_ranges", 24, 1, 4096);
 
@@ -314,17 +312,22 @@ void registerTimingTools() {
 			     json e{{"tag", r.tag}, {"start", r.start}, {"end", r.end},
 				    {"start_hex", hex16(r.start)}, {"end_hex", hex16(r.end)},
 				    {"last_hex", hex16(r.end - 1)},	// end is exclusive
-				    {"instructions", r.instructions}, {"ns", r.ns},
+				    {"instructions", r.instructions},
+				    // accumulated per instruction, not t*rate at
+				    // the end: a turbo step inside the run
+				    // prices its own half
+				    {"ns", r.ns},
 				    {"calls", r.calls}, {"entries", r.entries}};
-			     long long t = nsPerT ? r.ns / nsPerT : 0;
-			     if (nsPerT) e["t_states"] = t;
+			     const long long t = r.t;
+			     e["t_states"] = t;
 			     if (r.calls) e["t_per_call"] = (double)t / (double)r.calls;
 			     // self time is what ran in here; inclusive adds what it called
 			     // out to, which is what "what does this routine cost me" means
 			     // for anything that is not a leaf
-			     if (nsPerT) {
-				     long long ti = r.inclusiveNs / nsPerT;
+			     {
+				     const long long ti = r.inclusiveT;
 				     e["t_states_inclusive"] = ti;
+				     e["ns_inclusive"] = r.inclusiveNs;
 				     e["instructions_inclusive"] = r.inclusiveInstructions;
 				     if (r.calls) e["t_per_call_inclusive"] = (double)ti / (double)r.calls;
 			     }
@@ -375,10 +378,20 @@ void registerTimingTools() {
 			     res["ranges_measured"] = (int)p.ranges.size();
 			     res["ranges_reported"] = (int)ranges.size();
 			     json other{{"instructions", p.otherInstructions},
-					{"t_states", nsPerT ? p.otherNs / nsPerT : 0}};
+					{"t_states", p.otherT}, {"ns", p.otherNs}};
 			     if (totalT)
-				     other["percent"] = 100.0 * (nsPerT ? p.otherNs / nsPerT : 0) / totalT;
+				     other["percent"] = 100.0 * p.otherT / totalT;
 			     res["unattributed"] = other;	// time in no range at all
+		     }
+		     // Accepting an interrupt runs no instruction at any address, so
+		     // its T are in no range and not unattributed either: without this
+		     // the parts would not add up to t_states.
+		     if (p.interrupts) {
+			     json acc{{"count", p.interrupts},
+				      {"t_states", p.interruptT}, {"ns", p.interruptNs}};
+			     if (totalT)
+				     acc["percent"] = 100.0 * p.interruptT / totalT;
+			     res["interrupt_acceptance"] = acc;
 		     }
 		     return res;
 	     });

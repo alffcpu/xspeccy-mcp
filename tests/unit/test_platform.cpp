@@ -150,26 +150,24 @@ void test_platform() {
 
 		std::vector<std::string> plain = platform::xpeccyConfigCandidates();
 		CHECK(!plain.empty());
-		// Exactly what xcore/config.cpp builds, which is $HOME and not
-		// XDG_CONFIG_HOME. Copying the emulator's own mistake is the point:
-		// the server has to look where the GUI actually wrote.
+		// The plus build's own directory comes first - it is where the fork's
+		// GUI writes - and the old samstyle path stays as a fallback for
+		// configurations this server was already running against.
 		CHECK_EQ(plain.front(),
 			 std::string("/test-home") + kSep + ".config" + kSep +
-			 "samstyle" + kSep + "xpeccy");
+			 "xpeccy-plus");
 
 		setEnv("XSP_XPECCY_CONF", "/forced/path");
 		std::vector<std::string> forced = platform::xpeccyConfigCandidates();
 		CHECK(forced.size() == plain.size() + 1);
 		CHECK_EQ(forced.front(), std::string("/forced/path"));
 
-		// XDG_CONFIG_HOME is consulted as well, but after the emulator's own
-		// location, so a machine that has both keeps working the way the GUI
-		// left it.
+		// XDG_CONFIG_HOME shifts both directories under it.
 		setEnv("XSP_XPECCY_CONF", "");
 		setEnv("XDG_CONFIG_HOME", "/xdg");
 		std::vector<std::string> withXdg = platform::xpeccyConfigCandidates();
-		CHECK(withXdg.size() == plain.size() + 1);
-		CHECK_EQ(withXdg.front(), plain.front());
+		CHECK(withXdg.size() == plain.size() + 1);	// the samstyle fallback under /xdg
+		CHECK_EQ(withXdg.front(), std::string("/xdg") + kSep + "xpeccy-plus");
 		bool sawXdg = false;
 		for (const std::string& c : withXdg)
 			if (c.find("/xdg") == 0) sawXdg = true;

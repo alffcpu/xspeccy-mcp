@@ -57,6 +57,9 @@ int argAddrRange(const json& a, const char* key, int def);
 // both the question and a different question's answer.
 int argAddrRequired(const json& a, const char* key);
 bool argAddrBank(const json& a, const char* key, int& out, int& bank);
+// "BB:OOOO" -> bank (-1 for bank FF, which is a CPU address) and offset. False
+// when the text is not of that shape; throws when it is but cannot be a place.
+bool parseBankOffset(const std::string& s, int& bank, int& offset);
 std::string argStr(const json& a, const char* key, const std::string& def = "");
 bool argBool(const json& a, const char* key, bool def);
 bool argDouble(const json& a, const char* key, double& out);

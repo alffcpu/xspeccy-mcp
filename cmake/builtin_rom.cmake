@@ -17,7 +17,11 @@ option(XSP_BUILTIN_ROM "Compile the emulator's 16K ROM into the executable" ON)
 
 set(XSP_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 set(_rom_header "${XSP_GENERATED_DIR}/xsp_rom_builtin.h")
+# upstream ships its 48K ROM as conf/1982.rom, xpeccy-plus as config/roms/48.rom
 set(_rom_file "${XPECCY_SRC}/conf/1982.rom")
+if(NOT EXISTS "${_rom_file}" AND EXISTS "${XPECCY_SRC}/config/roms/48.rom")
+	set(_rom_file "${XPECCY_SRC}/config/roms/48.rom")
+endif()
 file(MAKE_DIRECTORY "${XSP_GENERATED_DIR}")
 
 if(NOT XSP_BUILTIN_ROM)

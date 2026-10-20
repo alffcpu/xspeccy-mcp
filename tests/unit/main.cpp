@@ -10,6 +10,7 @@ int main() {
 	test_keyboard();
 	test_platform();
 	test_config();
+	test_builtin();
 	test_settings();
 	test_machine();
 	test_server();

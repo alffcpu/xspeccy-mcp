@@ -4,6 +4,8 @@
 #include "xsp_blend.h"
 
 #include <cctype>
+#include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -105,23 +107,76 @@ int argAddrRequired(const json& a, const char* key) {
 	return v;
 }
 
+// "BB:OOOO", both parts hex, the way a symbol file writes a banked address.
+// Bank FF is the symbol file's "no bank": the number after it is a CPU address
+// already (xsp_labels.cpp reads it the same way), so it comes back as bank -1.
+// Any other bank takes an offset inside one 16K bank; past $3FFF is the next
+// bank, which this spelling never means, so it is refused rather than wrapped.
+// Whether the machine has that many banks is the caller's question - this
+// only knows the text.
+bool parseBankOffset(const std::string& raw, int& bank, int& offset) {
+	const std::string s = xsp::trim(raw);
+	const size_t colon = s.find(':');
+	if (colon == std::string::npos || colon == 0) return false;
+	const std::string bt = xsp::trim(s.substr(0, colon));
+	const std::string ot = xsp::trim(s.substr(colon + 1));
+	auto isHex = [](const std::string& t) {
+		if (t.empty()) return false;
+		for (char ch : t) if (!isxdigit((unsigned char)ch)) return false;
+		return true;
+	};
+	// a left half that is not hex is not this spelling at all - leave it to
+	// whoever reads labels and numbers
+	if (!isHex(bt)) return false;
+	if (!isHex(ot))
+		throw std::runtime_error("bad bank:offset '" + s + "': the offset must be hex, "
+					 "as in 05:200E");
+	// saturating, and compared before the narrowing: a long hex string must
+	// not wrap into a small number that names somewhere real
+	auto hexVal = [](const std::string& t) {
+		unsigned long long v = 0;
+		for (char ch : t) {
+			const int d = isdigit((unsigned char)ch) ? ch - '0'
+								 : tolower((unsigned char)ch) - 'a' + 10;
+			v = v * 16 + (unsigned)d;
+			if (v > 0xffffffffull) return 0xffffffffull;
+		}
+		return v;
+	};
+	const unsigned long long b = hexVal(bt);
+	const unsigned long long o = hexVal(ot);
+	if (b == 0xff) {
+		if (o > 0xffff)
+			throw std::runtime_error("bad bank:offset '" + s + "': bank FF means a CPU "
+						 "address, and that is $0000..$FFFF");
+		bank = -1;
+		offset = (int)o;
+		return true;
+	}
+	if (o > 0x3fff)
+		throw std::runtime_error("bad bank:offset '" + s + "': the offset is inside one "
+					 "16K bank, $0000..$3FFF");
+	// too big for any machine either way; kept big rather than wrapped, so the
+	// caller's "no such bank" names a number that is not a real one
+	bank = b > (unsigned long long)INT_MAX ? INT_MAX : (int)b;
+	offset = (int)o;
+	return true;
+}
+
 // As argAddr(), but also reports which page the address belongs to when the
 // argument carries one: a label loaded from a "BB:OOOO name" line, or the same
 // "bank:offset" written out by hand (both parts hex, as in the symbol file).
-// bank stays -1 for a plain address, which means "wherever it is mapped now".
+// bank stays -1 for a plain address, which means "wherever it is mapped now" -
+// and for bank FF, which is how a symbol file says exactly that.
 bool argAddrBank(const json& a, const char* key, int& out, int& bank) {
 	bank = -1;
 	if (a.is_object() && a.contains(key) && a[key].is_string()) {
 		std::string s = xsp::trim(a[key].get<std::string>());
-		size_t colon = s.find(':');
-		if (colon != std::string::npos && colon > 0) {
-			int b = 0, off = 0;
-			if (xsp::parseNumber("$" + s.substr(0, colon), b) &&
-			    xsp::parseNumber("$" + s.substr(colon + 1), off)) {
-				bank = b;
-				out = xsp::Labels::mapBankOffset(b, off);
-				return true;
-			}
+		int b = -1, off = 0;
+		if (parseBankOffset(s, b, off)) {
+			bank = b;
+			out = b < 0 ? off : xsp::Labels::mapBankOffset(b, off);
+			return true;
 		}
 		if (const auto* e = mach().labels().entry(s)) {
 			out = e->address;
@@ -252,18 +307,17 @@ json skipUntil(const json& a, const char* key) {
 		throw std::runtime_error("never reached " + hex16(adr) + " in " +
 					 std::to_string(budget) + " instructions (stopped: " +
 					 r.reason + " at " + hex16(r.pc) + ")");
-	const int nsPerT = mach().comp()->nsPerTick;
 	return json{{"address", adr}, {"address_hex", hex16(adr)},
 		    {"instructions", r.instructions},
-		    {"t_states", nsPerT > 0 ? r.ns / nsPerT : 0},
+		    {"t_states", r.t},
 		    {"frames", r.frames}};
 }
 
 json runToJson(const xsp::RunResult& r) {
-	// T-states are the currency on a Z80, and they cannot be recovered from ns
-	// afterwards: the core's nanosecond is a truncated integer (284 for 285.714),
-	// so only the division it did itself gives the count back exactly.
-	const int nsPerT = mach().comp() ? mach().comp()->nsPerTick : 0;
+	// r.t is exact T-states counted by the cpu (tickCount delta); r.ns is the
+	// wall clock the core charged, accumulated per instruction so a turbo
+	// step inside the run is priced at the rate it ran at, not the rate it
+	// stopped at.
 	json j = {
 		{"reason", r.reason},
 		{"pc", r.pc},
@@ -271,8 +325,11 @@ json runToJson(const xsp::RunResult& r) {
 		{"instructions", r.instructions},
 		{"frames", r.frames},
 		{"ns", r.ns},
-		{"t_states", nsPerT > 0 ? r.ns / nsPerT : 0}
+		{"t_states", r.t}
 	};
+	// a step that accepted an interrupt ran no instruction, so it is not in
+	// `instructions`; its T-states are in t_states all the same
+	if (r.interrupts) j["interrupts"] = r.interrupts;
 	if (r.reason == "breakpoint") {
 		j["break_type"] = r.brk_type;
 		j["break_address"] = r.brk_addr;

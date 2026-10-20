@@ -7,10 +7,12 @@ namespace tools {
 void registerMachineTools() {
 	tool("machine_config",
 	     "Read or change the machine. Give a model name (see list_models) and everything else "
-	     "- romset, RAM size, screen geometry - comes from the emulator's own defaults for it. "
-	     "No arguments = report the current configuration. Changing the model resets the machine.",
+	     "- romset, RAM size, screen geometry - comes from that machine's definition for it. "
+	     "A machine-definition id works as well as a hardware name: \"zxplus2\" is the +2, "
+	     "not just any ZX128 board. No arguments = report the current configuration. "
+	     "Changing the model resets the machine.",
 	     json{{"properties", {
-		     {"model", {{"type", "string"}, {"description", "machine name, e.g. Pentagon, ZX48K, Scorpion"}}},
+		     {"model", {{"type", "string"}, {"description", "hardware name or definition id, e.g. Pentagon, ZX48K, zxplus2, evo-tsconf"}}},
 		     {"memory", {{"type", "integer"}, {"description", "RAM in KB; clamped to what the model supports"}}},
 		     {"romset", {{"type", "string"}, {"description", "romset name from the emulator config"}}},
 		     {"geometry", {{"type", "string"}, {"description", "screen layout name, e.g. default, Pentagon"}}},
@@ -20,29 +22,65 @@ void registerMachineTools() {
 		     json changed = json::array();
 		     std::string err;
 		     bool touched = false;
+		     // Names are checked before anything moves: a bad romset after a
+		     // good model used to leave the new model running on whatever
+		     // was half set up for it, with no reset behind it.
+		     if (a.contains("romset") && !mach().env().findRomset(argStr(a, "romset")))
+			     throw std::runtime_error("unknown romset '" + argStr(a, "romset") + "'");
+		     if (a.contains("geometry")) {
+			     const std::string g = argStr(a, "geometry");
+			     if (!mach().env().findLayout(g) &&
+				 (g.find("ULA.") == 0 || !mach().env().findLayout("ULA." + g)))
+				     throw std::runtime_error("unknown geometry '" + g + "'");
+		     }
+		     // What still fails past this point (a romset whose files cannot be
+		     // read, a memory size the board refuses) fails after something has
+		     // changed; the machine is reset either way, so what is left
+		     // running is at least one coherent machine.
+		     auto fail = [&](const std::string& why) {
+			     if (touched) {
+				     mach().reset(RES_DEFAULT);
+				     vid_clear_image();
+				     xsp::video::historyClear();
+			     }
+			     std::string msg = why;
+			     if (!changed.empty())
+				     msg += " (already applied and kept: " + changed.dump() + ")";
+			     throw std::runtime_error(msg);
+		     };
 		     if (a.contains("model")) {
-			     if (!mach().setModel(argStr(a, "model"), err)) throw std::runtime_error(err);
+			     if (!mach().setModel(argStr(a, "model"), err)) fail(err);
 			     changed.push_back("model"); touched = true;
 		     }
 		     if (a.contains("memory")) {
-			     if (!mach().setMemory(argNumOr(a, "memory", 128), err)) throw std::runtime_error(err);
+			     if (!mach().setMemory(argNumOr(a, "memory", 128), err)) fail(err);
 			     changed.push_back("memory"); touched = true;
 		     }
 		     if (a.contains("romset")) {
-			     if (!mach().setRomset(argStr(a, "romset"), err)) throw std::runtime_error(err);
+			     if (!mach().setRomset(argStr(a, "romset"), err)) fail(err);
 			     changed.push_back("romset"); touched = true;
 		     }
 		     if (a.contains("geometry")) {
-			     if (!mach().setLayout(argStr(a, "geometry"), err)) throw std::runtime_error(err);
+			     if (!mach().setLayout(argStr(a, "geometry"), err)) fail(err);
 			     changed.push_back("geometry"); touched = true;
 		     }
+		     json boot;
+		     if (touched) {
+			     mach().reset(RES_DEFAULT);
+			     // a reset does not redraw: with boot_frames 0 the last frame
+			     // would be read on the new layout's pitch, every line skewed
+			     vid_clear_image();
+			     xsp::video::historyClear();
+			     int frames = argNumOr(a, "boot_frames", 100);
+			     if (frames > 0) boot = runToJson(mach().runFrames(frames));
+		     }
+		     // the state after the boot: the screen size especially, which
+		     // depends on the mode the booted machine is in
 		     json res = machineStateJson();
 		     res["changed"] = changed;
 		     res["config_source"] = mach().env().note;
 		     if (touched) {
-			     mach().reset(RES_DEFAULT);
-			     int boot = argNumOr(a, "boot_frames", 100);
-			     if (boot > 0) res["boot"] = runToJson(mach().runFrames(boot));
+			     if (!boot.is_null()) res["boot"] = boot;
 			     res["pc"] = cpu_get_pc(mach().comp()->cpu);
 			     res["pc_hex"] = hex16(cpu_get_pc(mach().comp()->cpu));
 		     }
@@ -53,14 +91,20 @@ void registerMachineTools() {
 	     "Every machine name this build of the emulator core knows, plus the romsets and screen "
 	     "geometries defined in the emulator's configuration. A handful of the machines are "
 	     "emulated by the core but cannot be run headlessly - machine_config refuses those and "
-	     "says why - so this is the list to choose from rather than a guarantee.",
+	     "says why - so this is the list to choose from rather than a guarantee. `machines` is "
+	     "the loaded definition list (id, display name, hardware): several can share one "
+	     "hardware, and their ids are also valid `model` arguments.",
 	     json{},
 	     [](const json&) {
 		     json romsets = json::array();
 		     for (const auto& r : mach().env().romsets) romsets.push_back(r.name);
 		     json layouts = json::array();
 		     for (const auto& l : mach().env().layouts) layouts.push_back(l.name);
-		     return json{{"models", mach().models()}, {"romsets", romsets}, {"geometries", layouts}};
+		     json defs = json::array();
+		     for (const auto& d : mach().env().machines)
+			     defs.push_back({{"id", d.id}, {"name", d.name}, {"hw", d.hw}});
+		     return json{{"models", mach().models()}, {"machines", defs},
+				 {"romsets", romsets}, {"geometries", layouts}};
 	     });
 
 	tool("machine_state",
@@ -142,7 +186,7 @@ void registerMachineTools() {
 			     {"frames_recorded", xsp::blend::filled()},
 			     {"greyscale", greyScale != 0},
 			     {"border_size", (int)(mach().borderSize() * 100 + 0.5)},
-			     {"screen", {{"width", c->vid->vsze.x}, {"height", c->vid->vsze.y}}},
+			     {"screen", {{"width", c->vid->vsze.x * video::frameScale(c)}, {"height", c->vid->vsze.y}}},
 			     {"palette", pal}
 		     };
 		     if (!changed.empty()) res["changed"] = changed;

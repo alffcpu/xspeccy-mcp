@@ -10,22 +10,280 @@ Which Xpeccy the server is built against is a decision made here and written dow
 whatever upstream happens to be serving on the day. Moving to a newer one is deliberate:
 
 ```sh
-python build.py --pin-xpeccy 0.6.20260901          # look it up, hash it, show the change
-python build.py --pin-xpeccy 0.6.20260901 --write  # apply it to VERSIONS
-python build.py --smoke                            # rebuild and run the suite
+python build.py --pin-xpeccy v2026.8            # look it up, hash it, show the change
+python build.py --pin-xpeccy v2026.8 --write    # apply it to VERSIONS
+python build.py --smoke                         # rebuild and run the suite
 ```
 
-The helper resolves the tag to a commit, fetches by that commit and computes the source hash,
-because doing the hash by hand is how a wrong one gets committed. It writes nothing without
-`--write`.
+The argument is an xpeccy-plus release tag (`v2026.8`, `2026.8` and `2026.8-plus` all name
+it) or a 40-hex commit. The helper resolves a tag to a commit, fetches by that commit and
+computes the source hash, because doing the hash by hand is how a wrong one gets committed.
+The version it records is the tree's own `VERSION` file with `-plus` appended, which is what
+the CMake build detects, so a pin by commit records a version name as well. It writes
+nothing without `--write`.
 
 Then read the failures rather than re-recording them. The expected values in `tests/smoke.sh`
 were measured against the old release, so a change in them is a real difference in the
 emulator until shown otherwise - screen digests especially, since those are the ones that
 would silently redefine what "unchanged" means.
 
-Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a dated upstream tag and never
-`stable` or `minor`: both are moving pointers, and a name that moves is not a pin.
+Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a release tag or a commit and
+never `nightly`: it is a moving pointer, and a name that moves is not a pin.
+
+## 1.4.0
+
+The emulator core moved from samstyle/Xpeccy to the
+[xpeccy-plus](https://github.com/dotkoval/xpeccy-plus) fork, release `v2026.6.2`, pinned by its
+commit `1f259fc8` on the fork's main branch. The fork carries contended memory and I/O contention, snow and floatbus, and
+machine definitions as data (`res/machines/*.conf`) instead of the hardcoded defaults this
+adapter used to carry - a machine named through `machine_config` now comes up with the
+contention, PSG chips, drives, ROM set and video timings its definition file declares. A
+samstyle tree is no longer accepted at configure time.
+
+54 tools now. `load_file` takes `.spg` snapshots and `.wav` tapes along with the disk
+formats the core understands (`.udi`, `.fdi`, `.td0`, `.dsk`, `.ima`). `sdcard` mounts,
+ejects, locks and reports the SD card image the fork's machines use. `read_memory` accepts
+a physical RAM bank as `"bank:offset"` (both hex, like a sjasmplus symbol), which is how a
+bank that is not paged in gets read - on TSConf that is the only way to look at an
+arbitrary 16K page. `machine_config` also resolves a model by its machine-definition file
+name (`evo-tsconf` finds the TSConf hardware).
+
+Two correctness fixes worth naming: the adapter now sets `flgBRKMEM` when a breakpoint is
+armed - the fork's `compExec` only consults the breakpoint maps under that flag, so direct
+map writes otherwise armed nothing; and a dangling `else` in the machine-definition parser
+that had silently skipped the `rom`/`storage`/`sound`/`input` sections since the parser
+landed is fixed, with a unit test on the shipped `pent.conf` so it stays fixed.
+`xhost_time_fixed` is pinned at init, so cold-RAM noise, the CMOS clock and power-on phase
+no longer depend on `time(NULL)` - same binary, same bytes, every run.
+
+And one accounting fix that the fork's timing rework exposed: the profiler, run/step
+results and `frame_cost` now count T-states from the core's own `tickCount` delta - the
+exact integer the cpu charges, contention waits included - instead of dividing the
+reported nanoseconds back by `nsPerTick`. The fork keeps `nsPerTick` as a precise double
+(upstream's truncated int was itself a bug: it slipped the Pentagon's frame interrupt off
+the dot grid); truncating it back to int on our side read every T-count ~0.25% high.
+The `ns` fields the tools report are unchanged keys, now computed as `t * nsPerTick`.
+
+Further correctness fixes:
+
+- **Machine definitions build the way upstream builds them.** A user's `machines/<id>.conf`
+  is a patch over the shipped definition of the same stem, not a replacement; `inherit`
+  resolves against the parent *as it ships*, so patching `zx128` cannot move `zxplus2`;
+  every field of a definition is applied unconditionally (`mac_defaults` underneath), so
+  switching machines can no longer leak contention, timing or storage state from the
+  previous one; and `setModel` keeps the definition that was asked for - `zxplus2` and
+  `zx128` share the ZX128 board but carry different roms and timing, and `machine_state`
+  now reports which definition applied as `machine`. Definition ids are listed by
+  `list_models` under `machines` and are valid `model` values.
+- **Reset now means what the definition says.** `resbank` is applied, so a Pentagon
+  resets onto its 128K menu like the hardware rather than straight into 48 BASIC.
+- **Hostile media never reaches the core's parsers.** `.td0` and `.dsk` files are
+  walked structurally before loading - the core's own readers treat EOF as success
+  (a truncated `.td0` loops forever) and trust declared sector counts past their
+  fixed tables. `.spg` compressed blocks are decoded by bounded mirrors of the
+  megalz/hrust depackers inside the validator, so a malicious stream is refused
+  before the loader sees it. `disk insert` gets the same checks as `load_file`.
+- **`.bin` keeps its old contract.** The BK-format loader the API always had -
+  little-endian address and length header, low byte of each word written at the
+  even address - ported verbatim. It had silently become a raw disk write.
+- **Machine selection checks what the board can do, not what it is called.** A
+  `.dsk` needs a +3DOS controller, a `.trd` needs Beta Disk on a compatible core,
+  an `.spg` needs TSConf - the same pairing upstream's `filemachine` uses, and a
+  user patch that drops the disk controller is no longer picked for a disk file.
+- **Machine definitions parse the way the GUI parses them.** Inline `#`/`;`
+  comments, case-insensitive sections, upstream's boolean table (anything not an
+  explicit `no`/`off`/`0`/`false`/`n` is true), and an empty `inherit =` clearing
+  the parent rather than meaning "key absent". `[GENERAL] machine` now outranks a
+  legacy profile's `[MACHINE] current`.
+- **Switching machines leaves nothing behind.** `memory = 0` means 64K as upstream
+  has it, 768K fits where the board's mask allows it, a missing GS rom or font is
+  cleared rather than inherited from the previous machine, the old frame image is
+  dropped instead of being re-read at the new geometry's pitch, and a definition
+  whose roms are all dead falls through to the built-in rescue set.
+- **Timing reports what the core counted.** Frame and line T-states come out at
+  the rounded value - a ZX128 reports its printed 228 T/line, not 227 - `fps_real`
+  follows the effective (turbo-adjusted) tick, and `ns` figures in run/step/profile
+  accumulate the nanoseconds `compExec` actually returned instead of being derived
+  from T-states under the final clock. The geometry-mismatch warning compares
+  against the right canonical frame for every shipped machine.
+- **ROM files resolve in two places**: the user's `roms/` first, then the roms shipped
+  with the core - and a definition whose roms cannot be loaded falls back to the
+  configured romset or the built-in ROM rather than booting on `0xFF`.
+- **`.spg` is validated before the core sees it** - signature, descriptor table and
+  declared payload sizes - because the loader walks them unchecked.
+- **`sdcard` rejects images `>= 1 GiB`** (the core's capacity math is 32-bit) and resets
+  the controller on mount/eject so a swapped card does not inherit a transfer.
+- **`read_memory` requires `address`** and range-checks a bank before it narrows -
+  `"100000000:0"` used to wrap silently into bank 0.
+- **Pre-execution breakpoints no longer count the instruction they stopped** - a fetch
+  or irq break that fires before the opcode runs (`flgBRKPRE`) stays out of the
+  instruction count, the profile and coverage.
+- **T-state deltas survive `tickCount` overflow** - the counter is a signed int that
+  wraps near `INT_MAX`, and deltas are taken as unsigned differences.
+
+One real behaviour difference worth knowing rather than chasing: the Pentagon's
+rom serves IM1 through a trampoline at `$5B00` that only its boot code writes -
+on cold RAM an interrupt lands on power-on noise and becomes an `rst #38` loop.
+Tests that enable interrupts must boot the machine first.
+
+More fixes against upstream behaviour:
+
+- **Three settings now reach the core through its own setters.** `timing.contendedMemory`
+  calls `comp_set_cont` (writing the flag alone never wired the CPU hook, so contention
+  was reported on and did nothing), `sound.chipType` calls `chip_set_type` (the chip was
+  relabelled but kept the previous chip's callbacks), and `sound.chipFrequency` goes
+  through the timing recalculation that sets `tickFx` (the pitch was ~14% off).
+- **`load_file` picks the machine the file needs**, the way upstream's `filemachine`
+  does: `.spg` lands on TSConf, snapshots on the hardware they were saved from when the
+  current machine cannot run them, TR-DOS disks on a Beta Disk machine, `.dsk` on a +3 -
+  and the reply names the `machine` and `model` it switched to.
+- **Half-dot video modes capture both pixels.** The TSConf/ATM/EVO text modes, ATM
+  hardware multicolour and both Profi hires modes draw two different pixels per dot;
+  captures and digests used to drop the odd one, so such a screen came out at half its
+  real width. `screen.width` now reports the full width too. A frame is read in the mode
+  it was drawn in, not the one the machine is in when the capture is taken, and
+  `record_video` keeps one width throughout: a frame in the other pixel width is resampled
+  to it (`frames_resampled`), and frames of a changed geometry are counted in
+  `frames_dropped` instead of vanishing. `border: false` crops the ATM/Evo and Profi
+  screens to their own paper (320x200, 256x240 dots), not the ZX one.
+- **Smaller fixes**: `[GENERAL] machine` accepts a hardware name as well as a definition
+  id, `TSLab` is a model alias for TSConf, an `sdcard mount` no longer inherits the
+  previous card's lock, the geometry-mismatch warning covers all 128K machines, and the
+  smoke suite's `dd` call is spelled so GNU `dd` accepts it.
+- **The pinned-core hash now covers the runtime resources** (`res/machines`,
+  `res/layouts.conf`, `config/roms`) that decide what a machine boots as, not only the
+  compiled sources.
+
+Media validation and failed-load rollback:
+
+- **Every loadable format is walked before the core sees it.** The disk and tape
+  parsers the core ships fread whatever a file declares and report success when it
+  runs out, so a truncated image "loaded" a disk or a snapshot out of whatever the
+  destination buffers already held - and refused formats still switched machines and
+  cold-filled RAM first. `.trd`, `.scl`, `.tap`, `.tzx`, `.sna`, `.z80` and `.ima`
+  now have the same structural preflight `.td0`/`.dsk`/`.fdi`/`.udi`/`.spg` already
+  had: the file must carry what its own fields promise, checked before
+  `machineForFile` can touch anything.
+- **Two crashes and a leak closed in the walk itself.** A zero-sector `.fdi` track
+  divided by the sector count inside `diskFormTrack`; a `.tzx` block `0x11` with a
+  zero data field became `fread(SIZE_MAX)` into a 0-byte malloc; a `.tzx` block
+  `0x19`'s symbol tables are now bounded against their block (the repro read 506
+  bytes past it). `.udi` records of unknown type are refused - the core leaks their
+  buffers and never uses the data anyway.
+- **`.ima` actually loads now.** All of the core's drives are DD, where a 1.44M
+  image's tracks silently failed to format while the loader reported success on the
+  stale disk - the adapter enables the HD geometry on just that drive (not the
+  whole FDC, which would have silently reshaped every mounted disk) and verifies a
+  sector reads back.
+- **`.trd` no longer ends on a phantom.** The core's load loop formats one stale
+  track past the file end on a boundary; the adapter clears it after a load.
+- **`.sna` sizes follow the real 128K layout.** Which bank the file pages in
+  decides whether it carries five or six trailing pages (131103 vs 147487) -
+  matching `saveSNA`'s own write loop, so a real round-trip still lands.
+- **`.z80` page walk mirrors the loader.** 48K snapshots map their pages
+  through the odd 4/5/8 scheme, and a short v2 header still starts its blocks
+  at offset 55 - the validator's view is now exactly the loader's.
+- **Mounted disk density survives everything.** Reset used to re-mark every
+  drive DD and silently break a mounted `.ima`; so did a turbo change, a model
+  switch or a snapshot's own reset. The adapter now remembers each drive's
+  formatted geometry and restores it whenever `zx_init` shrinks it.
+- **Short `.trd` tails are zeros, not leftovers.** A file ending mid-track had
+  its missing sectors formatted out of the previous track's bytes; they are
+  blanked - through the core's own sector writer, so their CRCs verify - and
+  the boundary phantom's sector map is cleared with its track.
+- **`.z80` duplicates prove nothing.** The loader stops after counting as
+  many page blocks as the machine has banks - duplicates included - so a
+  file whose repeats end the walk before every bank arrives is refused
+  instead of loading half the RAM.
+- **`.fdi`/`.td0`/`.dsk` that cannot fit are refused.** A track the drive has
+  no room for used to leave the old disk in place while reporting success -
+  every `diskFormTrack`-fed format now has to fit the real track length
+  before it loads. An extended `.dsk` sector shorter than the bytes the core
+  writes into the track loads with its tail zeroed and its CRC rewritten -
+  the tail used to come out of the previous sector's buffer.
+- **A refused `load_file` gives back what the switch took.** Picking the
+  file's machine could eject drives its drive count did not fit; on any
+  failure past the validators the machine and every mounted drive are
+  restored - flags, path, geometry and the dirty bit included. The machine
+  restore itself is attempted first and cannot eat the original error or
+  skip the drives, and a drive that survived a failed load still gets its
+  track geometry back - a failed `.ima` used to leave a DD disk at HD
+  length. The rollback ends where the load succeeds: an error building
+  the reply afterwards can no longer un-format the freshly written disk.
+  A file that gets past the validators and still fails mid-format - the
+  image changed on disk between the check and the open, say - used to
+  leave its own path over a half-written disk; the target drive's track
+  bytes are part of the snapshot now, and a failed `load_file`/`disk
+  insert` hands the previous disk back whole or leaves the drive empty.
+  `load_file`'s `drive` argument is range-checked too: a 4 used to land
+  on drive A by way of `drv & 3`.
+- **A tiny `.tzx` can no longer eat the memory.** The core stores every pulse
+  and grows its buffer with an unchecked `realloc` on an `int` count, and a
+  20-byte file looping a pure-tone block expands into billions of pulses. The
+  validator now runs the tape the way the core's interpreter does - loops,
+  calls, jumps, the step limit - and refuses past 2^26 pulses, CSW-compressed
+  data included.
+- **A refused `load_file` no longer wipes the session.** The track-fit check ran
+  after the switch to the file's machine, and switching back cold-filled RAM:
+  memory and PC were gone. The check runs before any switch now, and a failure
+  that still comes after one restores a core snapshot taken before it. An
+  `.ima`'s HD track length no longer outlives it: eject and any other image put
+  the drive back to DD (`disk state` shows `track_bytes`).
+- **Smaller media fixes.** An SD image of exactly 1 GiB mounts (only larger
+  ones break the core's math). An extended `.dsk` track-length byte of `0x80`
+  or more is refused, since the core reads it as a signed or unsigned char
+  depending on the host.
+- **The binary carries what the core keeps as data.** Machine definitions,
+  layouts and the shipped ROMs (GS firmware and fonts included) used to be read
+  at run time from the source tree the binary was built from: moved or with
+  `build/` deleted, `zx48` and `evo-tsconf` were unknown machines, ZX48 ran on
+  the default geometry at 71680 T, and Pentagon booted the 48K ROM. They are
+  compiled in now (`cmake/builtin_resources.cmake`), under `XSP_BUILTIN_ROM` for
+  the ROMs; a user's file of the same name still wins.
+- **Sound and contention settings reach the whole board.** `sound.chipType`,
+  `sound.chipFrequency` and `sound.chipStereo` set every chip, as the GUI does -
+  a TurboSound used to have one half retuned. A chip type change re-derives the
+  clock (a YM2203 runs at twice the AY's). `timing.contPattern` also picks the
+  screen drawer, as the core's `zx_set_vmode()` does, instead of leaving the
+  early fetch to the next reset.
+- **Breakpoints land where they say.** `clear_breakpoints` clears the cells it
+  armed even after the model or romset changed under them (it used to re-mask
+  them with the new machine's mask and miss). A `bank:offset` naming a bank the
+  machine does not have, or an offset past `$3FFF`, is an error; `FF:` means
+  "no bank" as in a symbol file. A port breakpoint up to `$FF` matches the low
+  byte, so `$FE` catches `out ($FE),a` whatever A is. `read_memory` follows the
+  same `bank:offset` rules and refuses a read off the end of a bank.
+- **Taking an interrupt is not an instruction.** It used to be counted as one
+  at the interrupted address, in run/step results, the profiler, coverage,
+  trace and `beam_log`. Results carry `interrupts`, the profile an
+  `interrupt_acceptance` block, so the parts still add up to `t_states`.
+  Coverage marks each instruction by its real length (a taken `jr` no longer
+  covers the bytes it skips), and `beam_log` no longer logs a fetch-break PC
+  twice.
+- **A failed change leaves the machine as it was.** A romset that fails to load
+  keeps the ROM that was there (it used to be wiped to `FF` while the old name
+  was still reported). `machine_config` checks romset and geometry names before
+  switching the model, and resets whatever it did apply when a later step
+  fails; its reply describes the machine after the boot, and a geometry change
+  with `boot_frames: 0` shows a cleared frame instead of the old one on the new
+  pitch. Notes from earlier machines no longer pile up in `config_source`.
+- **Machine files read as upstream reads them.** A UTF-8 BOM no longer hides
+  the first section, `border.min = no` is the upstream spelling (`none` still
+  works), and a ROM shorter than 16K is padded with `FF` instead of mirrored.
+- **The pin is a release.** The core was pinned to the tip of an unmerged
+  branch, a commit no branch or tag of the fork holds and the host may drop.
+  It is `v2026.6.2` now, on the fork's main branch, which carries everything
+  the old pin had plus a few later core fixes; the version floor follows it.
+- **A bare server says what it runs.** With no configuration it starts on the
+  Pentagon definition (128K, Pentagon ROMs with TR-DOS, Beta Disk, AY), and
+  the startup line now names that definition instead of the profile's romset
+  and geometry, which made it read as a 48K ROM on the default geometry. A
+  build with `XSP_BUILTIN_ROM=OFF` finds the fork's `config/roms/48.rom` for
+  its fallback romset again; it was still looking for samstyle's
+  `conf/1982.rom`.
+- **`build.py`** runs on Python 3.8 again, and `--pin-xpeccy <commit>` records
+  the tree's own version as the CMake build detects it, so pinning the current
+  commit reproduces `VERSIONS` instead of making every build warn.
 
 ## 1.3.1
 

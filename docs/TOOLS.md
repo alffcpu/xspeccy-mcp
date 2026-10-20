@@ -1,6 +1,6 @@
 # Tool reference
 
-All 53 tools the server exposes. Arguments marked **bold** are required; everything else has
+All 54 tools the server exposes. Arguments marked **bold** are required; everything else has
 a default. Numeric arguments accept a number or a string in any of the usual notations:
 `32768`, `"0x8000"`, `"$8000"`, `"#8000"`, `"%1000000000000000"`.
 
@@ -33,9 +33,9 @@ romset, RAM size and screen geometry come from the profile Xpeccy itself would b
 | Tool | Arguments | What it does |
 |---|---|---|
 | `settings` | `action`, `name`, `value`, `save`, `path` | Every emulator setting this server can change, what it is set to, where that value came from, and what changing it costs. No arguments reports all of them. |
-| `machine_config` | `model`, `memory`, `romset`, `geometry`, `boot_frames` | Read or change the machine. Any change resets and re-boots it. No arguments = report the current setup. |
-| `list_models` | - | Every machine name the core supports, plus the romsets and geometries defined in the configuration. |
-| `machine_state` | - | Model, RAM, romset, CPU and clock, frame timing, screen size, the disk controller, and which ROM/RAM bank is visible at `$0000/$4000/$8000/$C000`. |
+| `machine_config` | `model`, `memory`, `romset`, `geometry`, `boot_frames` | Read or change the machine. `model` takes a hardware name or a machine-definition id (`zxplus2`, `evo-tsconf`) - several definitions can share one hardware, and the id picks exactly one. Any change resets and re-boots it, and the reply describes the machine after the boot. An unknown `romset` or `geometry` is refused before anything changes; a step that fails after others went through (a romset whose files cannot be read) still resets, and the error lists what was applied. No arguments = report the current setup. |
+| `list_models` | - | Every hardware name the core supports, the loaded machine definitions (`machines`: id, display name, hardware), plus the romsets and geometries defined in the configuration. |
+| `machine_state` | - | Model, the machine definition applied (`machine`), RAM, romset, CPU and clock, frame timing, screen size, the disk controller, and which ROM/RAM bank is visible at `$0000/$4000/$8000/$C000`. |
 | `reset` | `mode`, `boot_frames` | Reset (`default`, `48`, `128`, `dos`, `shadow`) and run `boot_frames` (default 100) so the machine reaches its prompt. |
 | `video_config` | `blend`, `gamma`, `frame_history`, `greyscale`, `border_size` | Read or change how frames become pictures. Sets the default blend for every later `screenshot`, `frame_digest` and `record_video`. No arguments = report. |
 
@@ -51,11 +51,18 @@ the Soviet clones, uPD765 on the +3, none elsewhere. It is set for you; the reas
 worth reporting is that a ZX machine without one cannot boot TR-DOS, and the symptom is a
 screen of uninitialised RAM that looks exactly like a corrupt ROM.
 
-Seven models in `list_models` are refused rather than started: `GameBoy`, `NES`,
-`Commodore64`, `BK0010`, `BK0011M`, `Specialist` and `PC-9801`. The core emulates them, but
-each one breaks the session without the Qt layer around it - the first six segfault on their
-first port access, and PC-9801 prints debug text into the JSON-RPC stream. `machine_config`
-returns the reason and leaves the machine you already had running. Everything else loads.
+A name `list_models` does not know is refused with "unknown machine", and a machine the
+headless core cannot run is refused with the reason - `machine_config` leaves the machine
+you already had running rather than half-applying the new one. Machines in the list whose
+definition carries no hardware (a user file that inherits a user-only parent, where the
+parent's own keys never cross) are visible but cannot be selected - same as upstream.
+
+A reset leaves the machine on whatever `reset` its definition declares: Pentagon's
+`resbank` is `RES_128`, so it comes up on the 128K menu, not in BASIC - `press_key`
+`down` x3 and `enter` chooses 48 BASIC, then its self-test runs. And a program that
+enables interrupts on a machine that has not booted should expect the Pentagon's IM1 to
+land on the RAM trampoline at `$5B00` that only the boot writes - cold RAM makes it an
+`rst #38` loop.
 
 ## Execution
 
@@ -63,15 +70,16 @@ returns the reason and leaves the machine you already had running. Everything el
 |---|---|---|
 | `run` | `max_instructions`, `stop_pc`, `max_frames` | Run until a breakpoint, `stop_pc`, a frame count or the instruction budget (default 10 000 000). Video and interrupts stay live. |
 | `run_frames` | `count` | Run exactly N timing-accurate frames. One frame is 1/50 s of emulated time. |
-| `step` | `count` | Execute N instructions, ignoring breakpoints. |
+| `step` | `count` | Execute N steps, ignoring breakpoints. A step is one instruction or the CPU taking a pending interrupt, which runs no instruction and lands on the handler; those are counted in `interrupts`, not `instructions`. |
 | `step_over` | - | One instruction, but `CALL`/`RST`/block instructions run to completion. |
 | `step_out` | - | Run until the current subroutine returns. |
 
 Every one of these returns a stop `reason`: `steps`, `breakpoint`, `pc`, `frames`, `budget`
 or `return`, along with the new `pc`, the instruction count, and both `ns` and **`t_states`**.
-Take the T-states: the core's nanosecond is a truncated integer (284 where 285.714 is right),
-so `ns` cannot be converted back afterwards. `run {"stop_pc": "main_loop"}` therefore measures
-a precalculation in one call, with no profiler wrapped around it.
+Take the T-states: they are the exact count the cpu charged, contention waits included;
+`ns` is derived from them for convenience and cannot be converted back exactly.
+`run {"stop_pc": "main_loop"}` therefore measures a precalculation in one call, with no
+profiler wrapped around it.
 
 ## CPU and memory
 
@@ -79,7 +87,7 @@ a precalculation in one call, with no profiler wrapped around it.
 |---|---|---|
 | `get_registers` | - | Main and shadow registers, the flags string, IM/IFF, halt state, T-states into the frame. |
 | `set_register` | **`name`**, **`value`** | Set one register by the name `get_registers` reports. |
-| `read_memory` | **`address`**, `length` | Read as the CPU sees it, through the current paging. Returns bytes and a hex string. |
+| `read_memory` | **`address`**, `length` | Read as the CPU sees it, through the current paging. `"bank:offset"` (both hex, like a symbol file) reads a physical 16K RAM bank directly, paged in or not. `FF:` means "no bank", as in a symbol file, and reads the CPU address. A bank past the machine's RAM, an offset past `$3FFF` and a read that would run off the end of the bank are refused rather than wrapped: the next bank by number is not what follows in CPU space. Returns bytes and a hex string. |
 | `write_memory` | **`address`**, `bytes` or `hex` | Write through the CPU mapping. Writes to a ROM page are dropped by the hardware - read back if it matters. |
 | `find_bytes` | **`pattern`**, `from`, `to` | Search the address space for a hex pattern (`"3E 05 C9"`). Returns the first address or −1. |
 
@@ -154,7 +162,7 @@ memory the real cost depends on where the beam is.
 | Tool | Arguments | What it does |
 |---|---|---|
 | `set_breakpoint` | **`address`**, `access`, `scope` | Break on `exec` (default), `read`, `write`, or a combination like `"read,write"`. |
-| `set_port_breakpoint` | **`port`**, `access` | Break on an I/O port read or write. |
+| `set_port_breakpoint` | **`port`**, `access` | Break on an I/O port read or write. A port up to `$FF` matches on the low byte whatever is on the high one, so `$FE` catches `out ($FE),a` with any A; a 16-bit port above `$FF` (`$7FFD`) matches exactly. The reply's `match` says which. |
 | `clear_breakpoints` | - | Remove everything this server armed, memory and I/O alike. |
 
 ### Which bank the breakpoint lands in
@@ -174,7 +182,9 @@ which bank and it lands where the code is, paged in or not:
 
 A label loaded from a `BB:OOOO name` line carries its bank, so the name alone is enough. The
 reply says which bank was used and whether it is paged in right now (`bank_paged_in`) - a
-`false` there is normal for a banked build, not a warning.
+`false` there is normal for a banked build, not a warning. A bank the machine does not have,
+or an offset past `$3FFF`, is an error rather than a cell somewhere else; `FF:8000` is the
+symbol-file spelling of "no bank" and arms the plain address `$8000`.
 
 `scope` picks the other kind the core keeps: `"address"` puts the breakpoint on the CPU
 address instead, where it fires whatever is paged in. Use it for a fixed entry point that
@@ -349,6 +359,13 @@ the file for no extra information - 628 KB against 214 KB on a real effect, same
 The quantum it found comes back as `every_nth_auto`. **`skip_until`** takes an address or
 label and winds there before recording, which keeps the precalculation out of the clip.
 
+A recording keeps the pixel width of its first frame. A program that switches between a
+full-dot mode and a hires or text mode (Profi, ATM, Evo, TSConf) would otherwise change the
+width under the encoder: frames drawn in the other width are resampled to the first one and
+counted in **`frames_resampled`** - exactly when widened (each pixel twice), first pixel of
+each pair when narrowed, so start the recording in the hires mode to keep all of it. Frames
+of a changed screen geometry cannot be fitted and are counted in **`frames_dropped`**.
+
 ## Symbols and source
 
 | Tool | Arguments | What it does |
@@ -396,7 +413,7 @@ lookup (address → name); every name still resolves forward.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `coverage` | `action`, `from`, `to`, `max_gaps`, `min_gap` | `start`/`stop`/`read`/`reset`. Reports the executed fraction of a range and the largest stretches that never ran, labelled where labels exist. |
+| `coverage` | `action`, `from`, `to`, `max_gaps`, `min_gap` | `start`/`stop`/`read`/`reset`. Reports the executed fraction of a range and the largest stretches that never ran, labelled where labels exist. An executed instruction marks all its bytes by its real length, so the bytes a taken `jr` skips stay a gap. |
 
 The unexecuted gaps are the point: after a test run they tell you which branches your test
 never took.
@@ -585,6 +602,10 @@ profile {"action": "read"}
   `from`/`to` bound the address window (default `$4000`–`$FFFF`).
 - **`unattributed`** is the time that fell in no range at all - with `symbols` it should be
   zero, and anywhere else it is the part of the frame you have not accounted for yet.
+- **`interrupt_acceptance`** is the CPU taking interrupts: 11-19 T each of bus cycles that
+  run no instruction at any address. They are in `t_states`, so ranges, `unattributed` and
+  this add up to the total, but in no range's own time, and `instructions` and `hot_pages`
+  do not count them.
 
 Two things to know about `symbols` mode, both inherent to using a symbol table as a map:
 labels that are really data or `EQU` constants become regions and will collect any code that
@@ -614,53 +635,51 @@ they come from the emulator's own timing rather than a table in this repo.
 
 ### 50 Hz is not the frame rate
 
-**`ns_per_t_state` is the core's integer time quantum**: `1000 / cpuFrq` truncated and then
-forced even, so 3.5 MHz gives 284 ns instead of 285.714. Everything derived from it
-(`ns_per_frame`, `ns_per_line`, `ns_per_dot`) is short by the same 0.6 %.
-
-The T-state counts are exact, so `frame_timing`, `machine_state` and `profile` also report the
-values computed from the clock, which is what you should budget against:
+**T-states are counted exactly**, straight from the cpu's own tick counter, so every
+`t_states` figure a tool reports - per range, per run, per frame - is the integer a real
+machine would agree with, waits included. The nanosecond fields exist for convenience and
+are computed at the fork's precise `nsPerTick` (kept as a double, and derived from the dot
+period so a tick is exactly two dots; the int truncation upstream used was itself a bug
+that slid the frame interrupt off the dot grid).
 
 | Field | Pentagon | Meaning |
 |---|---|---|
 | `t_states_per_frame` | `71680` | exact, from the core's own dot timing |
-| `fps_real` | `48.828125` | `cpu_frq × 1e6 / t_states_per_frame` |
-| `ns_per_t_state` | `284` | the core's truncated quantum |
-| `ns_per_t_state_real` | `285.714…` | `1000 / cpu_frq` |
-| `ns_per_frame` | `20357120` | quantum × T per frame |
-| `ns_per_frame_real` | `20480000` | real time a frame takes |
+| `fps_real` | `48.828125` | `1e9 / ns_per_frame`: frames per second at the clock the CPU is actually running, so a turbo raises it |
+| `ns_per_t_state` | `285.714…` | per-tick period, precise, turbo included |
+| `ns_per_t_state_real` | `285.714…` | the same value, kept for compatibility |
+| `ns_per_frame` | `20480000` | the frame's span in ns, exact to a fraction of a dot |
+| `ns_per_frame_real` | `20480000` | real time a frame takes - also identical |
 
 There used to be an `fps` beside `fps_real`, carrying the nominal 50 that `zx_init()` set for
-every ZX machine whatever its geometry. Xpeccy `0.6.20260804` deleted the field, and these
+every ZX machine whatever its geometry. Upstream deleted the field, and these
 tools no longer report it. Nothing else changed: `fps_real` was always the number to budget
 against, and it still is.
 
 ### The raster comes from the geometry, not from the model
 
-Naming a model does not change the frame length. In Xpeccy the layout is a setting of the
-*profile* (`prfSetLayout`), and its built-in `default` is 448×320 - Pentagon's raster. So
-`machine_config {"model": "ZX48K"}` gives you a ZX48K whose frame is timed at Pentagon's
-71680 T instead of its own 69888: every budget, headroom and fps out by 2.6 %, and nothing
-about the numbers looks wrong.
+Each machine definition pins its own geometry (`zx48.conf` says `geometry = ULA.48`), so
+naming a model times the frame the way the real machine does. The footgun that remains is
+the *separate* `geometry` argument: `machine_config {"model": "ZX48", "geometry": "default"}`
+(or a patched definition) gives you a ZX48 timed at Pentagon's 71680 T instead of its own
+69888 - every budget, headroom and fps out by 2.6 %, and nothing about the numbers looks
+wrong.
 
-`machine_config`, `machine_state`, `frame_timing` and `frame_cost` now say so, in a `warning`
-field naming both figures. The machine is left exactly as the emulator would have booted it -
-the fix is yours to make, by naming a geometry whose height matches:
+`machine_config`, `machine_state`, `frame_timing` and `frame_cost` say so, in a `warning`
+field naming both figures. The machine is left exactly as configured - the fix is yours to
+make, by naming a geometry whose height matches:
 
 ```jsonc
-machine_config {"model": "ZX48K", "geometry": "Scorpion"}   // 448x312 → 69888 T
+machine_config {"model": "ZX48", "geometry": "ULA.48"}   // 448x312 → 69888 T
 ```
 
-The warning appears only for machines whose raster is not in doubt - `ZX48K` and `Scorpion`
-at 69888, `Spectrum +2`/`+3` at 70908, `Pentagon`/`Pentagon1024SL` at 71680. For anything
+The warning appears only for machines whose raster is not in doubt - `ZX48` and `Scorpion`
+at 69888, `Plus2A`/`Plus3` at 70908, `Pentagon`/`Pentagon1024SL` at 71680. For anything
 else nothing is claimed and nothing is said.
 
 So an effect costing `T` T-states runs at `fps_real / ceil(T / t_states_per_frame)` - 48.8 Hz
 if it fits in one frame, 24.4 Hz if it takes two. `profile` returns `t_states_per_frame` and
 `fps_real` at the top level next to the per-range numbers, so the whole sum is in one answer.
-
-The `ns` figures a `run` returns are core-quantum nanoseconds too; divide by `ns_per_t_state`
-(not by the real one) to get back to exact T-states.
 
 ## Sound
 
@@ -685,11 +704,12 @@ The 48K ROM starts in keyword-entry mode, so `PRINT` is one keypress (`p`), not 
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `load_file` | **`path`**, `drive` | Load by extension: `.sna`/`.z80` snapshots, `.tap`/`.tzx` tapes, `.trd`/`.scl` disks, `.bin` raw. Snapshots start running immediately. |
+| `load_file` | **`path`**, `drive` | Load by extension: `.sna`/`.z80` snapshots, `.spg` (TSConf/Profi), `.tap`/`.tzx`/`.wav` tapes, `.trd`/`.scl`/`.udi`/`.fdi`/`.td0`/`.dsk`/`.ima` disks, `.bin` raw. Snapshots start running immediately. `.bin` is the legacy BK format - a little-endian address/length header, payload written to RAM at the even addresses - and stays on whatever machine is running. Every format's declared structure is validated before the core sees it - `.spg`, `.td0`, `.dsk`, `.fdi`, `.udi`, `.trd`, `.scl`, `.tap`, `.tzx`, `.sna`, `.z80`, `.ima` - a truncated or miscounted file is refused, never half-loaded, and the machine is not switched for a file that cannot load (the core's own parsers would hang on, overflow, or fabricate them). A `.tzx` is also played through in the validator the way the core will expand it, loops and calls included, and refused past 2^26 pulses (the core keeps every pulse, 8 bytes each). An extended `.dsk` sector shorter than its size code loads with the rest of the sector zeroed and its CRC rewritten - copy-protected disks have them - instead of carrying the previous sector's bytes. A refused load leaves the session as it was: memory, registers, machine and mounted disks. `.ima` needs HD-density tracks: the adapter enables them on the drive before loading, and any other image puts the drive back to DD. When the format names a machine the current one cannot run (an `.spg` wants TSConf, a `.trd` wants a Beta Disk, a `.dsk` wants a +3), the machine switches first and the reply's `machine`/`model` say where it landed - the way upstream's `filemachine` picks. |
 | `save_snapshot` | **`path`** | Save the current state as `.sna`. |
 | `tape` | `action`, `block` | `state`, `play`, `stop`, `rewind`, `next`, `eject`, `blocks`. Loading a tape does not press play. |
-| `disk` | `action`, `drive`, `path` | `state`, `insert`, `eject`, `save`. Drive 0 is A. `state` also reports the controller the machine has. |
+| `disk` | `action`, `drive`, `path` | `state`, `insert`, `eject`, `save`. Drive 0 is A. `state` also reports the controller the machine has, and each drive's `track_bytes` (6250 for DD, 17700 once an `.ima` made it HD). `eject` returns the drive to DD. |
 | `disk_catalog` | `drive` | The TR-DOS catalogue of the inserted disk: names, extensions, start address, length, track and sector. |
+| `sdcard` | `action`, `path` | `state`, `mount`, `eject`, `lock`, `unlock`. The raw sector-addressed card image the TSConf/ZX-Evo, ATM or Profi SD controller sees; mount it before boot. Images larger than 1 GiB are refused - the core's capacity math is 32-bit and cannot survive them; exactly 1 GiB is fine. Mounting or ejecting resets the controller, so a swapped card powers up uninitialized like a real one - including its lock: a card mounted after a locked one starts unlocked. |
 
 Inserting an image does not boot it: `reset {"mode": "dos"}` puts the machine in TR-DOS, and
 from the `A>` prompt the disk is readable. `disk_catalog` reads the image directly and works

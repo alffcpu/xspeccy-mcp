@@ -17,9 +17,23 @@ namespace video {
 // every layout change or the frame buffer geometry goes stale.
 void applyGeometry(Computer* comp);
 
+// Output pixels per raster dot for the current video mode. Most modes draw a
+// dot as a duplicated pixel pair, so 1: the first of the pair is the picture.
+// The half-dot modes - ATM/EVO/TSConf text, ATM hardware multicolour and both
+// Profi hires modes - put two different pixels into the pair, and the honest
+// frame is twice as wide (the upstream GUI shows vsze.x*2 everywhere, which is
+// why the buffer is that wide).
+int pixelScale(Computer* comp);
+
+// The same for the last completed frame - the one a screenshot shows. It can
+// differ from pixelScale() as soon as the program switches modes: a capture
+// reads a frame in the mode it was drawn in.
+int frameScale(Computer* comp);
+
 struct Shot {
 	int width = 0;
 	int height = 0;
+	int pixelScale = 1;		// output pixels per dot the frame was read at
 	std::vector<unsigned char> rgba;
 };
 
@@ -40,8 +54,12 @@ struct BlendInfo {
 // of returning the last one alone, which is how a flickering picture is seen as
 // the one image it is meant to be. -1 takes the setting from blend::defaults(),
 // 0 or 1 is the raw frame.
+//
+// `forceScale` reads the frame at that many pixels per dot instead of its own:
+// a recording keeps one width throughout, and a full-dot frame read at 2 is
+// exact, a half-dot one read at 1 keeps the first pixel of each pair.
 Shot capture(Computer* comp, bool border, int scale,
-	     int blendFrames = -1, BlendInfo* info = nullptr);
+	     int blendFrames = -1, BlendInfo* info = nullptr, int forceScale = 0);
 
 // Copies the frame that just finished into the blend history. Called at every
 // frame boundary; does nothing when the history is switched off.

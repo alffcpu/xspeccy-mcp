@@ -17,6 +17,9 @@ bool makeDir(const std::string& path);		// single level, ok if it exists
 
 std::string join(const std::string& a, const std::string& b);
 
+// File names inside a directory, unsorted, without . and .. ; empty on error.
+std::vector<std::string> listDir(const std::string& path);
+
 // Where Xpeccy keeps its configuration, most likely first. On Unix this is
 // $HOME/.config/samstyle/xpeccy, exactly as xcore/config.cpp builds it; on
 // Windows the GUI puts it next to its own .exe, so there is nothing to guess -

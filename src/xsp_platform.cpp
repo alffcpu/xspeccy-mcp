@@ -1,6 +1,7 @@
 #include "xsp_platform.h"
 
 #include <cstdlib>
+#include <cstring>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -9,6 +10,7 @@
 	#include <fcntl.h>
 	#include <io.h>
 	#include <process.h>
+	#include <windows.h>
 	#ifndef S_ISDIR
 		#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 	#endif
@@ -16,6 +18,7 @@
 		#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
 	#endif
 #else
+	#include <dirent.h>
 	#include <unistd.h>
 #endif
 
@@ -82,17 +85,47 @@ std::string join(const std::string& a, const std::string& b) {
 #endif
 }
 
+std::vector<std::string> listDir(const std::string& path) {
+	std::vector<std::string> res;
+#ifdef _WIN32
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA(join(path, "*").c_str(), &fd);
+	if (h == INVALID_HANDLE_VALUE) return res;
+	do {
+		if (strcmp(fd.cFileName, ".") && strcmp(fd.cFileName, ".."))
+			res.push_back(fd.cFileName);
+	} while (FindNextFileA(h, &fd));
+	FindClose(h);
+#else
+	DIR* d = opendir(path.c_str());
+	if (!d) return res;
+	while (dirent* e = readdir(d))
+		if (strcmp(e->d_name, ".") && strcmp(e->d_name, ".."))
+			res.push_back(e->d_name);
+	closedir(d);
+#endif
+	return res;
+}
+
 std::vector<std::string> xpeccyConfigCandidates() {
 	std::vector<std::string> res;
 	std::string forced = env("XSP_XPECCY_CONF");
 	if (!forced.empty()) res.push_back(forced);
 
-	// what xcore/config.cpp:conf_init() builds on Unix - note it uses $HOME
-	// directly and ignores XDG_CONFIG_HOME, so we must too
-	res.push_back(join(join(join(homeDir(), ".config"), "samstyle"), "xpeccy"));
-
 	std::string xdg = env("XDG_CONFIG_HOME");
-	if (!xdg.empty()) res.push_back(join(join(xdg, "samstyle"), "xpeccy"));
+
+	// xpeccy-plus keeps its own directory ($XDG_CONFIG_HOME/xpeccy-plus, or
+	// ~/.config without it) so the two emulators can sit side by side; the old
+	// samstyle path stays as a fallback for configurations this server was
+	// already running against
+	if (xdg.empty()) {
+		res.push_back(join(join(homeDir(), ".config"), "xpeccy-plus"));
+		res.push_back(join(join(join(homeDir(), ".config"), "samstyle"), "xpeccy"));
+	} else {
+		res.push_back(join(xdg, "xpeccy-plus"));
+		res.push_back(join(join(xdg, "samstyle"), "xpeccy"));
+		res.push_back(join(join(join(homeDir(), ".config"), "samstyle"), "xpeccy"));
+	}
 
 #ifdef _WIN32
 	std::string appdata = env("APPDATA");

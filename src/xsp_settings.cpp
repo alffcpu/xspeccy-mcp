@@ -52,8 +52,27 @@ aymChip* chip(Machine& m) {
 	return (c && c->ts) ? c->ts->chipA : nullptr;
 }
 
+// One setting covers every chip on the board, as in the GUI: a TurboSound
+// with only chipA retuned plays its two halves out of tune.
+TSound* board(Machine& m) {
+	Computer* c = m.comp();
+	return (c && c->ts && c->ts->chipA && c->ts->chipB && c->ts->chipC)
+		? c->ts : nullptr;
+}
+
 double getContPattern(Machine& m) { ulaPlus* u = ula(m); return u ? u->conttype : CONT_PATA; }
-void setContPattern(Machine& m, double v) { if (ulaPlus* u = ula(m)) u->conttype = (int)v; }
+// The pattern also picks the screen drawer (zx_set_vmode: VID_ULA_SCR fetches
+// early, VID_NORMAL does not), so it is redone here the way the GUI does after
+// the same write - but only while a plain zx screen is up: a machine sitting
+// in one of its own modes keeps it and gets the drawer at its next reset.
+void setContPattern(Machine& m, double v) {
+	ulaPlus* u = ula(m);
+	if (!u) return;
+	u->conttype = (int)v;
+	Computer* c = m.comp();
+	if (c->vid->vmode == VID_NORMAL || c->vid->vmode == VID_ULA_SCR)
+		zx_set_vmode(c);
+}
 
 double getEarly(Machine& m) { ulaPlus* u = ula(m); return (u && u->early) ? 1 : 0; }
 void setEarly(Machine& m, double v) { if (ulaPlus* u = ula(m)) u->early = v != 0; }
@@ -71,7 +90,10 @@ void setBrdStep(Machine& m, double v) {
 }
 
 double getContMem(Machine& m) { Computer* c = m.comp(); return (c && c->flgCNTM) ? 1 : 0; }
-void setContMem(Machine& m, double v) { if (Computer* c = m.comp()) c->flgCNTM = v != 0; }
+// comp_set_cont(), not a field write: plus installs the contention callback on
+// the cpu (flgCONT + xcont, comp_cont vs comp_cont_hw under turbo) - setting
+// flgCNTM alone leaves the flag reporting on and the hook never installed.
+void setContMem(Machine& m, double v) { if (Computer* c = m.comp()) comp_set_cont(c, v != 0); }
 
 double getContIo(Machine& m) { Computer* c = m.comp(); return (c && c->flgCNTI) ? 1 : 0; }
 void setContIo(Machine& m, double v) { if (Computer* c = m.comp()) c->flgCNTI = v != 0; }
@@ -83,7 +105,9 @@ double getDdPal(Machine& m) { Computer* c = m.comp(); return (c && c->flgDDP) ? 
 void setDdPal(Machine& m, double v) { if (Computer* c = m.comp()) c->flgDDP = v != 0; }
 
 double getTurbo(Machine& m) { Computer* c = m.comp(); return c ? c->frqMul : 1.0; }
-void setTurbo(Machine& m, double v) { if (Computer* c = m.comp()) compSetTurbo(c, v); }
+void setTurbo(Machine& m, double v) {
+	if (Computer* c = m.comp()) { compSetTurbo(c, v); m.reapplyDriveGeom(); }
+}
 
 double getResBank(Machine& m) { Computer* c = m.comp(); return c ? c->resbank : RES_48; }
 void setResBank(Machine& m, double v) { if (Computer* c = m.comp()) c->resbank = (int)v; }
@@ -92,13 +116,44 @@ double getFdcTurbo(Machine&) { return fdcFlag ? 1 : 0; }
 void setFdcTurbo(Machine&, double v) { fdcFlag = (v != 0) ? 1 : 0; }
 
 double getChipType(Machine& m) { aymChip* a = chip(m); return a ? a->type : SND_AY; }
-void setChipType(Machine& m, double v) { if (aymChip* a = chip(m)) a->type = (int)v; }
+// chip_set_type() re-routes res/rd/wr/sync/vol from snd_chip_tab: writing
+// `type` alone leaves a chip that reports one model and still sounds like
+// the old one. The board's chip count (ts->type) says which slots are live;
+// ts_set_frq() afterwards because the clock depends on the type - a YM2203
+// runs at twice the AY's, so keeping the old frq drops it an octave.
+void setChipType(Machine& m, double v) {
+	TSound* ts = board(m);
+	if (!ts) return;
+	const int count = (ts->type == TS_ZXNEXT) ? 3 : (ts->type == TS_NEDOPC) ? 2 : 1;
+	aymChip* psg[3] = {ts->chipA, ts->chipB, ts->chipC};
+	for (int i = 0; i < 3; i++)
+		chip_set_type(psg[i], (i < count) ? (int)v : SND_NONE);
+	ts_set_frq(ts, ts->frq, m.comp()->cpuFrq);
+}
 
 double getStereo(Machine& m) { aymChip* a = chip(m); return a ? a->stereo : AY_MONO; }
-void setStereo(Machine& m, double v) { if (aymChip* a = chip(m)) a->stereo = (int)v; }
+void setStereo(Machine& m, double v) {
+	if (TSound* ts = board(m))
+		ts->chipA->stereo = ts->chipB->stereo = ts->chipC->stereo = (int)v;
+}
 
-double getChipFrq(Machine& m) { aymChip* a = chip(m); return a ? a->frq : 1.7744; }
-void setChipFrq(Machine& m, double v) { if (aymChip* a = chip(m)) a->frq = v; }
+// The board's clock in AY terms, which is what a machine file's psg.frq says;
+// 0 there means auto, half the CPU's base crystal.
+double getChipFrq(Machine& m) {
+	TSound* ts = board(m);
+	if (!ts) return 1.7744;
+	return ts->frq > 0 ? ts->frq : m.comp()->cpuFrq / 2;
+}
+// tickFx (the resample ratio the mixer steps by) is derived from frq inside
+// chip_set_type(); writing frq alone leaves the chip playing at the old pitch.
+// ts_set_frq() does that for all three chips and applies the type's clock
+// multiplier, with the same halving past 4.2MHz a machine file gets.
+void setChipFrq(Machine& m, double v) {
+	TSound* ts = board(m);
+	if (!ts) return;
+	const int mul = chip_frq_mul(ts->chipA->type);
+	ts_set_frq(ts, (mul > 1 && v * mul > 4.2) ? v / mul : v, m.comp()->cpuFrq);
+}
 
 // video: the same storage video_config uses, so the two tools cannot disagree
 double getBlend(Machine&) { return blend::defaults().frames; }

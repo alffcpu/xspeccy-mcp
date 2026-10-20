@@ -1,5 +1,6 @@
 # Build and local tooling output
 build/
+build-*/
 .cache/
 
 # Common local files

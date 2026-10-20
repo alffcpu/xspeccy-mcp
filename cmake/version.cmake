@@ -35,6 +35,7 @@ endfunction()
 
 xsp_read_version(XSPECCY_MCP_VERSION XSP_VERSION)
 xsp_read_version(XPECCY_VERSION XSP_XPECCY_REQUIRED)
+xsp_read_version(XPECCY_COMMIT XSP_XPECCY_COMMIT)
 xsp_read_version(XPECCY_MINIMUM XSP_XPECCY_MINIMUM)
 
 message(STATUS "xspeccy-mcp ${XSP_VERSION}, built against Xpeccy ${XSP_XPECCY_REQUIRED}")

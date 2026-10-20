@@ -9,13 +9,13 @@ namespace xsp {
 namespace video {
 
 void applyGeometry(Computer* comp) {
-	// zoom 1, no filters (xcore/vscalers.cpp:vid_upd_scale, else-branch)
-	xstep = 1 << 8;
-	ystep = 1 << 8;
-	lefSkip = rigSkip = topSkip = botSkip = pixSkip = 0;
-	// MainWin::updateWindow(), non-OpenGL path: bytesPerLine = window width * 4
-	bytesPerLine = comp->vid->vsze.x * 4;
-	bufSize = bytesPerLine * comp->vid->vsze.y;
+	// what the GUI does on a geometry change (emulwin.cpp): the buffer is the
+	// whole raster - blanking included - at two pixels per dot, 8 bytes each,
+	// doubled when the machine doubles its lines. The frame the caller sees
+	// is a crop of it (vid->lcut .. vid->vsze); buffers live inside the core.
+	Video* v = comp->vid;
+	bytesPerLine = v->full.x * 8;
+	bufSize = bytesPerLine * v->full.y * (v->linedbl ? 2 : 1);
 	// Upstream's own antiflicker stays off for good: it blends destructively
 	// into the buffer a screenshot and a digest both read, and history-dependent
 	// pixels in the picture we call ground truth is not a trade worth making.
@@ -23,29 +23,127 @@ void applyGeometry(Computer* comp) {
 	noflic = 0;
 	// greyScale is left alone: it is a setting video_config owns, and a layout
 	// change is no reason to undo what the caller asked for.
-	blend::clear();		// frames drawn with the old geometry cannot be blended
+	historyClear();		// frames drawn with the old geometry cannot be blended
 }
 
-// Which part of the frame buffer a capture covers. Shared so that a digest and
-// a screenshot of the same frame never disagree about what "the frame" is.
+int pixelScale(Computer* comp) {
+	if (!comp || !comp->vid) return 1;
+	switch (comp->vid->vmode) {
+		// the draw callbacks that reach vid_dot_half(): each dot writes
+		// two different pixels. Text modes go through their own draw loop,
+		// ATM hardware multicolour and both Profi hires modes through
+		// vidDrawByteDD - same four-byte write per half-dot either way
+		case VID_ATM_TEXT:
+		case VID_EVO_TEXT:
+		case VID_TSL_TEXT:
+		case VID_ATM_HWM:
+		case VID_PRF_MC:
+		case VID_PRF_MONO:
+			return 2;
+	}
+	return 1;
+}
+
+// What each completed frame was drawn as, newest first, kept beside the blend
+// history so a frame is read back in its own mode rather than in whatever mode
+// the machine has switched to since. A mode switch lands anywhere in a frame;
+// the frame is taken at the wider of the modes it started and ended in, which
+// loses nothing: a full-dot pair read at scale 2 is just the pixel twice.
 namespace {
 
 struct Rect { int x = 0, y = 0, w = 0, h = 0; };
 
-Rect cropRect(Computer* comp, bool border) {
+// Where a mode puts its picture, in dots from the layout's paper origin. The
+// layout describes the ZX screen; the ATM/Evo modes and Profi draw a bigger
+// one around it, each from its own origin (video.c: vid_atm_org, vid_profi).
+Rect paperRect(const Video* vid, int vmode) {
+	switch (vmode) {
+		case VID_ATM_EGA:
+		case VID_ATM_TEXT:
+		case VID_ATM_HWM:
+		case VID_EVO_TEXT:
+			return Rect{-32, -4, 320, 200};
+		case VID_PRF_MC:
+		case VID_PRF_MONO:
+			return Rect{0, -24, 256, 240};
+	}
+	return Rect{0, 0, vid->scrn.x, vid->scrn.y};
+}
+
+struct FrameMode { int scale = 1; int vmode = VID_NORMAL; };
+
+std::vector<FrameMode> g_frames;	// newest first, at most blend::kMaxHistory
+FrameMode g_lastEnd;			// the mode the previous frame ended in
+bool g_haveLastEnd = false;		// false: no frame boundary since a clear
+
+FrameMode currentMode(Computer* comp) {
+	FrameMode m;
+	m.scale = pixelScale(comp);
+	m.vmode = (comp && comp->vid) ? comp->vid->vmode : VID_NORMAL;
+	return m;
+}
+
+// The mode of the newest `count` completed frames taken together. Before any
+// frame has completed, bufimg holds a cleared image and the machine's present
+// mode is as good an answer as any.
+FrameMode framesMode(Computer* comp, int count) {
+	if (g_frames.empty()) return currentMode(comp);
+	FrameMode m = g_frames.front();
+	for (int i = 1; i < count && i < (int)g_frames.size(); i++) {
+		const FrameMode& f = g_frames[i];
+		if (f.scale > m.scale) m.scale = f.scale;
+		const Rect a = paperRect(comp->vid, f.vmode), b = paperRect(comp->vid, m.vmode);
+		if (a.w * a.h > b.w * b.h) m.vmode = f.vmode;
+	}
+	return m;
+}
+
+} // namespace
+
+int frameScale(Computer* comp) { return framesMode(comp, 1).scale; }
+
+// The shown frame, out of a raw buffer: the lcut crop. The core draws 2
+// pixels per dot, so a normalized frame is vsze.x*pixelScale by vsze.y. In a
+// full-dot mode the pair is a duplicate and the first pixel of it is the whole
+// answer; the half-dot modes draw two different pixels per dot, and there the
+// frame carries both.
+namespace {
+
+std::vector<unsigned char> normalized(Computer* comp, const unsigned char* src, int ps) {
+	Video* vid = comp->vid;
+	std::vector<unsigned char> out;
+	if (!src || vid->vsze.x <= 0 || vid->vsze.y <= 0) return out;
+	out.resize((size_t)vid->vsze.x * ps * vid->vsze.y * 4);
+	const unsigned char* base = src + (size_t)vid->lcut.y * bytesPerLine
+				  + (size_t)vid->lcut.x * 8;
+	for (int y = 0; y < vid->vsze.y; y++) {
+		const unsigned char* srow = base + (size_t)y * bytesPerLine;
+		unsigned char* drow = out.data() + (size_t)y * vid->vsze.x * ps * 4;
+		for (int x = 0; x < vid->vsze.x; x++)
+			memcpy(drow + (size_t)x * ps * 4, srow + (size_t)x * 8, (size_t)ps * 4);
+	}
+	return out;
+}
+
+// Which part of the normalized frame a capture covers. Shared so that a
+// digest and a screenshot of the same frame never disagree about what "the
+// frame" is.
+Rect cropRect(Computer* comp, bool border, const FrameMode& fm) {
 	Video* vid = comp->vid;
 	Rect r;
-	const int fullW = bytesPerLine / 4;
+	const int ps = fm.scale;
+	const int fullW = vid->vsze.x * ps;	// in output pixels, like r
 	const int fullH = vid->vsze.y;
 	if (fullW <= 0 || fullH <= 0) return r;
 	r.w = fullW;
 	r.h = fullH;
 	if (!border) {
 		// paper starts at vid->bord, and the captured image starts at vid->lcut
-		r.x = vid->bord.x - vid->lcut.x;
-		r.y = vid->bord.y - vid->lcut.y;
-		r.w = vid->scrn.x;
-		r.h = vid->scrn.y;
+		const Rect p = paperRect(vid, fm.vmode);
+		r.x = (vid->bord.x + p.x - vid->lcut.x) * ps;
+		r.y = vid->bord.y + p.y - vid->lcut.y;
+		r.w = p.w * ps;
+		r.h = p.h;
 		if (r.x < 0) r.x = 0;
 		if (r.y < 0) r.y = 0;
 		if (r.x + r.w > fullW) r.w = fullW - r.x;
@@ -56,29 +154,50 @@ Rect cropRect(Computer* comp, bool border) {
 
 } // namespace
 
-// The frames a capture is made of, newest first. Normally the last completed
-// frame alone; with blending, that one and the ones before it.
+// The frames a capture is made of, newest first, normalized to the shown
+// crop. Normally the last completed frame alone; with blending, that one and
+// the ones before it.
 //
 // bufimg holds the last completed frame and scrimg the one being drawn, so the
 // history's newest entry and bufimg are the same picture - the history is read
 // for all of them, and bufimg is the fallback for when it is empty or off.
 namespace {
 
-std::vector<const unsigned char*> sources(int blendFrames, BlendInfo* info) {
+// The raw frames a capture reads and the mode they are read in, before any
+// pixel is touched, so the crop can be worked out from the same answer.
+std::vector<const unsigned char*> rawFrames(Computer* comp, int& blendFrames,
+					    int forceScale, FrameMode& fm) {
 	if (blendFrames < 0) blendFrames = blend::defaults().frames;
 	if (blendFrames < 1) blendFrames = 1;
 	if (blendFrames > blend::kMaxHistory) blendFrames = blend::kMaxHistory;
 
+	std::vector<const unsigned char*> raw;
+	if (blendFrames > 1) raw = blend::history(blendFrames);
+	if (raw.empty()) raw.push_back(bufimg);
+	fm = framesMode(comp, (int)raw.size());
+	if (forceScale > 0) fm.scale = forceScale;
+	return raw;
+}
+
+std::vector<const unsigned char*> sources(Computer* comp, int blendFrames,
+					const std::vector<const unsigned char*>& raw,
+					const FrameMode& fm,
+					std::vector<std::vector<unsigned char>>& owned,
+					BlendInfo* info) {
 	std::vector<const unsigned char*> src;
-	if (blendFrames > 1) src = blend::history(blendFrames);
-	if (src.empty()) src.push_back(bufimg);
+	for (const unsigned char* r : raw) {
+		owned.push_back(normalized(comp, r, fm.scale));
+		src.push_back(owned.back().data());
+	}
+	const size_t frameBytes = (size_t)comp->vid->vsze.x * fm.scale
+				  * comp->vid->vsze.y * 4;
 
 	if (info) {
 		info->frames = blendFrames;
 		info->used = (int)src.size();
 		info->gamma = blend::defaults().gamma;
 		info->on = src.size() > 1;
-		info->distinct = info->on ? blend::distinctCount(src, (size_t)bufSize)
+		info->distinct = info->on ? blend::distinctCount(src, frameBytes)
 					  : (int)src.size();
 		info->pattern = blend::patternName(blend::pattern((size_t)bufSize));
 	}
@@ -87,18 +206,23 @@ std::vector<const unsigned char*> sources(int blendFrames, BlendInfo* info) {
 
 } // namespace
 
-Shot capture(Computer* comp, bool border, int scale, int blendFrames, BlendInfo* info) {
+Shot capture(Computer* comp, bool border, int scale, int blendFrames, BlendInfo* info,
+	     int forceScale) {
 	Shot shot;
-	const Rect rc = cropRect(comp, border);
+	FrameMode fm;
+	const auto raw = rawFrames(comp, blendFrames, forceScale, fm);
+	shot.pixelScale = fm.scale;
+	const Rect rc = cropRect(comp, border, fm);
 	const int x0 = rc.x, y0 = rc.y, w = rc.w, h = rc.h;
 	if (w <= 0 || h <= 0) return shot;
 
 	if (scale < 1) scale = 1;
 	if (scale > 8) scale = 8;
 
+	std::vector<std::vector<unsigned char>> owned;
 	std::vector<unsigned char> flat;		// w*h, one frame or the average
-	blend::mixRect(sources(blendFrames, info), blend::defaults().gamma,
-		       bytesPerLine, x0, y0, w, h, flat);
+	blend::mixRect(sources(comp, blendFrames, raw, fm, owned, info), blend::defaults().gamma,
+		       comp->vid->vsze.x * fm.scale * 4, x0, y0, w, h, flat);
 	if (flat.empty()) return shot;
 
 	shot.width = w * scale;
@@ -120,11 +244,29 @@ Shot capture(Computer* comp, bool border, int scale, int blendFrames, BlendInfo*
 	return shot;
 }
 
-void historyPush(Computer*) {
+void historyPush(Computer* comp) {
+	// the frame started in the mode the last one ended in; of the two, the
+	// one with the larger picture decides the crop, the wider one the scale
+	const FrameMode end = currentMode(comp);
+	FrameMode m = end;
+	if (g_haveLastEnd) {
+		const Rect a = paperRect(comp->vid, g_lastEnd.vmode);
+		const Rect b = paperRect(comp->vid, end.vmode);
+		if (a.w * a.h > b.w * b.h) m.vmode = g_lastEnd.vmode;
+		if (g_lastEnd.scale > m.scale) m.scale = g_lastEnd.scale;
+	}
+	g_lastEnd = end;
+	g_haveLastEnd = true;
+	g_frames.insert(g_frames.begin(), m);
+	if ((int)g_frames.size() > blend::kMaxHistory) g_frames.pop_back();
 	if (bufSize > 0) blend::push(bufimg, (size_t)bufSize);
 }
 
-void historyClear() { blend::clear(); }
+void historyClear() {
+	g_frames.clear();
+	g_haveLastEnd = false;
+	blend::clear();
+}
 
 // ZX screen address of the pixel row `line` (0..191)
 static int scrLineAddr(int base, int line) {
@@ -319,16 +461,19 @@ std::string memoryDigest(Computer* comp, int from, int to, std::string& err) {
 FrameHash frameDigest(Computer* comp, bool border, bool perLine,
 		      int blendFrames, BlendInfo* info) {
 	FrameHash out;
-	const Rect rc = cropRect(comp, border);
+	FrameMode fm;
+	const auto raw = rawFrames(comp, blendFrames, 0, fm);
+	const Rect rc = cropRect(comp, border, fm);
 	if (rc.w <= 0 || rc.h <= 0) return out;
 	out.width = rc.w;
 	out.height = rc.h;
 
 	// the same pixels a screenshot with the same arguments would write, so the
 	// digest and the PNG next to it describe one and the same picture
+	std::vector<std::vector<unsigned char>> owned;
 	std::vector<unsigned char> flat;
-	blend::mixRect(sources(blendFrames, info), blend::defaults().gamma,
-		       bytesPerLine, rc.x, rc.y, rc.w, rc.h, flat);
+	blend::mixRect(sources(comp, blendFrames, raw, fm, owned, info), blend::defaults().gamma,
+		       comp->vid->vsze.x * fm.scale * 4, rc.x, rc.y, rc.w, rc.h, flat);
 	if (flat.empty()) return out;
 
 	const size_t rowBytes = (size_t)rc.w * 4;

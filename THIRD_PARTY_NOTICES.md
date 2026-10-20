@@ -1,8 +1,8 @@
 # Third-party notices
 
 A built `xspeccy-mcp` is not only this repository's code. It statically contains
-an emulator core, a JSON library, a compression library and a 16K ROM image,
-none of which are ours. Each is listed below with what it is, where it comes
+an emulator core with its machine definitions, a JSON library, a compression
+library and the ROM images the core ships, none of which are ours. Each is listed below with what it is, where it comes
 from, and the notice its licence asks to be carried with a distributed binary.
 
 This file travels with the source. Anyone shipping a compiled binary should ship
@@ -10,16 +10,19 @@ it too, or the equivalent notice alongside.
 
 ## Xpeccy (libxpeccy)
 
-- Upstream: https://github.com/samstyle/Xpeccy
-- Author: SAM style
-- Licence: MIT
+- Upstream: https://github.com/dotkoval/xpeccy-plus, a fork of
+  https://github.com/samstyle/Xpeccy
+- Author: SAM style, and the xpeccy-plus contributors
+- Licence: MIT (`LICENSE_eng` in the fork)
 - Version: the commit pinned in [`VERSIONS`](VERSIONS) as `XPECCY_COMMIT`
 
 `src/libxpeccy` is compiled into a static library and linked into the
 executable. The sources are fetched unmodified at build time and are never
 copied into this repository or patched; `build.py` verifies them against the
 SHA-256 in `VERSIONS` before building. Only the core is used - the Qt layers
-`src/xcore` and `src/xgui` are not compiled.
+`src/xcore` and `src/xgui` are not compiled. The fork's machine definitions
+(`res/machines/*.conf`) and screen layouts (`res/layouts.conf`) are compiled
+into the executable as data, under the same licence.
 
 ```
 Copyright (c) 2009-..., SAM style
@@ -85,23 +88,34 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-## The ZX Spectrum 48K ROM
+## The ROM images
 
-- File: `conf/1982.rom` in the Xpeccy sources, 16384 bytes,
-  MD5 `d6e6b9f5777a348ff7b20cc6bd27589e`
-- Contains the string `1982 Sinclair Research Ltd`
-- Copyright: Amstrad plc, who acquired the Sinclair computer copyrights in 1986
+- Files: `config/roms/*.rom` in the xpeccy-plus sources, about 1.8 MB: the
+  Sinclair/Amstrad 48K, 128K, +2 and +3 ROMs, Pentagon, TR-DOS and GLUK,
+  Scorpion, Profi, ATM, ZX Evo/TSConf, the General Sound firmware and the
+  `sgen.rom` font
+- Copyright: each image stays with its own rights holder; the Sinclair images
+  with Amstrad plc, who acquired the Sinclair computer copyrights in 1986
+- Terms: `config/roms/LICENSE` in the fork, which states that the images are
+  **not** covered by the emulator's MIT licence; `config/roms/PROVENANCE.md`
+  lists every image, where it came from and its status, and
+  `config/roms/AMSTRAD.copyright` carries the canonical Amstrad notice. Those
+  three files are not compiled in; read them in the fork
 
-`cmake/builtin_rom.cmake` reads this file at configure time and writes it into
-the build directory as a C array, so the linked executable can boot a machine on
-a host that has neither an Xpeccy tree nor an Xpeccy configuration. **A built
-binary therefore contains the ROM image.** The file paths still win when they
-exist, so a host with a real romset uses the real romset; the built-in copy is
-the last resort. Configure with `-DXSP_BUILTIN_ROM=OFF` to leave it out, and the
-server will then need a ROM from the host.
+`cmake/builtin_resources.cmake` compiles these images into the executable, so
+the linked binary boots every machine on its own ROMs on a host that has
+neither an Xpeccy tree nor an Xpeccy configuration. **A built binary therefore
+contains the ROM images.** A file of the same name in the host's configuration
+still wins, so a host with its own romset uses it. Configure with
+`-DXSP_BUILTIN_ROM=OFF` to leave all of them out, and the server will then need
+ROMs from the host.
+
+The fork's terms for the images are that they are not sold on their own, not
+embedded into hardware, and that the copyright messages inside them are kept;
+none of the bundled images is modified, here or in the fork.
 
 Amstrad have given permission for the Sinclair ROM images to be redistributed
 with emulators, on the condition that the copyright notice is retained and they
 are not sold. That permission is theirs and not ours to grant onward; anyone
-redistributing a binary built with the ROM compiled in should satisfy themselves
+redistributing a binary built with the ROMs compiled in should satisfy themselves
 that their use is within it.

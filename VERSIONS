@@ -9,47 +9,47 @@
 
 # The server's own version, reported over MCP as serverInfo.version and by
 # --version. See CHANGELOG.md.
-XSPECCY_MCP_VERSION = 1.3.1
+XSPECCY_MCP_VERSION = 1.4.0
 
-# The Xpeccy release the server is built and tested against. This name is for
-# people; the pin that actually binds is XPECCY_COMMIT below.
+# The emulator core the server is built and tested against. Since 1.4.0 that is
+# xpeccy-plus (https://github.com/dotkoval/xpeccy-plus), not samstyle's upstream:
+# the fork carries contended memory and I/O, machine definition files and the
+# TSConf/SD-card hardware this server now depends on. The version string is the
+# fork's VERSION file with "-plus" appended, which is what the build detects it
+# as.
 #
-# Use a dated tag and nothing else. Upstream also publishes tags called `stable`
-# and `minor`, and both are moving pointers - at the time of writing `stable` is
-# 3f05efa while this tag is a385440. Pinning to a name that moves is not a pin.
-XPECCY_VERSION = 0.6.20260820
+# Pinning to a name that moves is not a pin: upstream's `stable`/`minor` and the
+# fork's `nightly` tags all move, so the name is for people and the commit below
+# is what binds.
+XPECCY_VERSION = 2026.6.2-plus
 
 # What build.py actually downloads. A tag can be moved; a commit cannot, so the
-# archive fetched by this SHA is the same bytes forever.
-XPECCY_COMMIT = d95018d359c780cd5325e0027495ce31fd97ec46
+# archive fetched by this SHA is the same bytes forever - as long as the commit
+# stays reachable, which is why it is the one the release tag v2026.6.2 names on
+# the fork's main branch. A commit no branch or tag holds (an unmerged branch
+# tip) can be dropped by the host, and the pin with it.
+XPECCY_COMMIT = 1f259fc8627058a1c71a4ce7c5588bd887a481f2
 
-# The oldest release that compiles at all, which is a different fact from the one
-# above and only happens to be the same release today. This one is fixed by the
-# source, and it has moved twice for two different reasons:
-#
-#   0.6.20260804 reshaped Computer's status bits into sysflag[] (marker: flgBRK).
-#   0.6.20260820 renamed Video.curscr to Video.vidPage. beam_position and the
-#   screen_* tools read that field to say which screen page is on air, so a tree
-#   older than this one no longer compiles. The build tests for the ABSENCE of
-#   curscr rather than the presence of vidPage: the older header already carried
-#   a vidPage of its own inside tsconf, so looking for that name accepts exactly
-#   the trees it is meant to reject.
-#
-# XPECCY_VERSION can move forward without this following, and then the two say
-# different things - which is why the build reads both rather than repeating a
-# number in its messages.
-XPECCY_MINIMUM = 0.6.20260820
+# The oldest source tree that compiles at all, which is a different fact from
+# the one above. With the move to xpeccy-plus the floor is the fork itself: the
+# adapter calls comp_set_cont()/vid_fnt_load() and reads machine definitions
+# from res/machines, none of which an upstream samstyle tree has. The build
+# probes spectrum.h for comp_set_cont - a name that exists only in the fork -
+# rather than a version, because a name that is there is a tree that compiles.
+XPECCY_MINIMUM = 2026.6.2-plus
 
-# SHA-256 of the src/libxpeccy sources, which is the only part of Xpeccy we
-# compile. Not a hash of the tarball: GitHub generates those on the fly and has
-# changed their compression before, so a tarball hash goes stale without a single
-# line of source changing. This is computed over the files themselves - each
-# relative path and its contents, sorted, NUL-separated.
+# SHA-256 of the parts of the Xpeccy tree this build actually uses: src/libxpeccy
+# (what we compile) plus the runtime resources xpeccy-plus made semantic inputs -
+# res/machines, res/layouts.conf and config/roms, which decide what a machine IS
+# and which ROM it boots. Not a hash of the tarball: GitHub generates those on
+# the fly and has changed their compression before, so a tarball hash goes stale
+# without a single line of source changing. This is computed over the files
+# themselves - each relative path and its contents, sorted, NUL-separated.
 #
 # Line endings are normalised to LF first, and that is not tidiness. A tree that
 # reached the disk through a Windows git checkout carries CRLF, and such a copy
-# differs from the tag's own tarball in 177 of its 195 files for that reason
-# alone while being character for character the same C. Hashing raw bytes would
+# differs from the tag's own tarball in most of its files for that reason alone
+# while being character for character the same source. Hashing raw bytes would
 # report a corrupt dependency on every Windows machine and be ignored within a
 # week, which is worse than not checking.
-XPECCY_LIBXPECCY_SHA256 = 99868f8c16aa129045b87a038e0391626c43a13914433dda17e994f9ec976f41
+XPECCY_LIBXPECCY_SHA256 = cff04a549f6bd76d4acf710a814397462fc224a7013d34217915129a56e7e1eb

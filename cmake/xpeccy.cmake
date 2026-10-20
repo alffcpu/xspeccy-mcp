@@ -6,9 +6,10 @@
 #   cmake -DXPECCY_SRC=/path/to/Xpeccy-0.6.20260804 ...
 #   XPECCY_SRC=/path/to/Xpeccy-0.6.20260804 cmake ...
 #
-# The oldest release that compiles is XPECCY_MINIMUM in VERSIONS: it renamed
-# Video.curscr to Video.vidPage, which the raster and screen tools read. Older
-# trees fail to compile rather than misbehave. XPECCY_VERSION there is the release actually built against, which
+# The oldest release that compiles is XPECCY_MINIMUM in VERSIONS: it reshaped
+# Computer's status bits into sysflag[], dropped the hwTab[] declaration and
+# stopped clearing the register bunch. Older trees fail to compile rather than
+# misbehave. XPECCY_VERSION there is the release actually built against, which
 # build.py reads as well; a tree that is not it still builds, with a warning
 # below. Both numbers are read from that file rather than written out again.
 
@@ -17,33 +18,37 @@ if(NOT XPECCY_SRC AND DEFINED ENV{XPECCY_SRC})
 endif()
 
 if(NOT XPECCY_SRC)
-	# usual local checkouts, newest first
+	# usual local checkouts, newest first; xpeccy-plus trees count too
 	file(GLOB _xp_candidates
 		"$ENV{HOME}/xpeccy/Xpeccy-*"
 		"$ENV{HOME}/Xpeccy-*"
+		"$ENV{HOME}/xpeccy-plus*"
+		"$ENV{HOME}/Xpeccy-plus*"
 		"${CMAKE_SOURCE_DIR}/../Xpeccy-*"
-		"${CMAKE_SOURCE_DIR}/../xpeccy/Xpeccy-*")
+		"${CMAKE_SOURCE_DIR}/../xpeccy/Xpeccy-*"
+		"${CMAKE_SOURCE_DIR}/../xpeccy-plus*"
+		"${CMAKE_SOURCE_DIR}/../Xpeccy-plus*")
 	list(SORT _xp_candidates)
 	list(REVERSE _xp_candidates)
 	# "Newest first" is a sort of directory NAMES, so anything alphabetic wins
-	# over a version: Xpeccy-git and Xpeccy-win both sort after
-	# Xpeccy-0.6.20260804. Collect first, choose after.
+	# over a version: xpeccy-plus-main and Xpeccy-win both sort after a bare
+	# version. Collect first, choose after.
 	# Same marker as the hard floor below, and it has to stay the same one: a
 	# tree this loop accepts is a tree the build will then try to compile, so a
-	# looser test here does not prevent the failure, it moves it somewhere that
-	# cannot explain itself. The marker is the ABSENCE of curscr and not the
-	# presence of the name that replaced it, because vidPage already existed in
-	# the older header as a byte inside the tsconf struct - testing for it
-	# accepts exactly the trees this is meant to reject.
+	# looser test here only moves the failure to somewhere that does not explain
+	# itself. The marker is comp_set_cont in spectrum.h - the contention call
+	# the adapter makes, which only the xpeccy-plus core has. An upstream
+	# samstyle tree fails the probe now, which is deliberate: with the move to
+	# the fork it can no longer build this adapter anyway.
 	foreach(_c ${_xp_candidates})
-		if(EXISTS "${_c}/src/libxpeccy/video/video.h")
-			file(READ "${_c}/src/libxpeccy/video/video.h" _xp_probe)
-			if(NOT _xp_probe MATCHES "curscr")
+		if(EXISTS "${_c}/src/libxpeccy/spectrum.h")
+			file(READ "${_c}/src/libxpeccy/spectrum.h" _xp_probe)
+			if(_xp_probe MATCHES "comp_set_cont")
 				list(APPEND _xp_usable "${_c}")
 			else()
-				# Too old to build against. Skipping it rather than picking it
+				# Not an xpeccy-plus tree. Skipping it rather than picking it
 				# and failing matters when both are on disk, which is the normal
-				# state of a machine that has been through an upstream bump.
+				# state of a machine that has an upstream checkout lying around.
 				list(APPEND _xp_too_old "${_c}")
 			endif()
 		endif()
@@ -76,47 +81,42 @@ if(NOT XPECCY_SRC OR NOT EXISTS "${XPECCY_SRC}/src/libxpeccy/spectrum.h")
 	set(_xp_hint "")
 	if(_xp_too_old)
 		string(REPLACE ";" "\n    " _xp_old_list "${_xp_too_old}")
-		set(_xp_hint "Found, but older than ${XSP_XPECCY_MINIMUM} and skipped:\n    ${_xp_old_list}\n")
+		set(_xp_hint "Found, but not xpeccy-plus (${XSP_XPECCY_MINIMUM} is the floor), skipped:\n    ${_xp_old_list}\n")
 	endif()
 	message(FATAL_ERROR
 		"Xpeccy sources not found.\n"
 		"${_xp_hint}"
-		"Pass -DXPECCY_SRC=/path/to/Xpeccy-<version> (the directory holding src/libxpeccy).\n"
+		"Pass -DXPECCY_SRC=/path/to/xpeccy-plus (the directory holding src/libxpeccy).\n"
 		"Or run: python build.py\n"
 		"Sources are built in place and never modified.")
 endif()
 
-# A tree too old to build against, caught here rather than as a screenful of C++
-# errors about members that no longer exist. Video called the screen page field
-# curscr until XPECCY_MINIMUM renamed it to vidPage, and the raster and screen
-# tools read it. This is the stricter of the two floors this project has had -
-# the older one was flgBRK in spectrum.h, which arrived when Computer's status
-# bits became sysflag[] - so testing the newer marker alone is enough.
-#
-# The test is for the OLD name. vidPage is no marker at all: the older header
-# already had one, a byte inside the tsconf struct, so a build probing for it
-# accepts precisely the trees that will not compile.
-file(READ "${XPECCY_SRC}/src/libxpeccy/video/video.h" _xp_video_h)
-if(_xp_video_h MATCHES "curscr")
+# A tree that cannot build this adapter, caught here rather than as a screenful
+# of C++ errors about functions that do not exist. Since the move to xpeccy-plus
+# the floor is the fork: spectrum.h there declares comp_set_cont(), the call
+# applyMachineDef() makes for a definition's contmem key, and no upstream
+# samstyle tree has it. The probe is for the name rather than a version stamp
+# because the call being there is precisely what compilation needs.
+file(READ "${XPECCY_SRC}/src/libxpeccy/spectrum.h" _xp_spectrum_h)
+if(NOT _xp_spectrum_h MATCHES "comp_set_cont")
 	message(FATAL_ERROR
-		"Xpeccy at ${XPECCY_SRC} is too old.\n"
-		"${XSP_XPECCY_MINIMUM} is the oldest that compiles - the release that renamed\n"
-		"Video.curscr to Video.vidPage. VERSIONS pins ${XSP_XPECCY_REQUIRED},\n"
-		"which is what this is built and tested against. Run python build.py to\n"
-		"fetch it.")
+		"The Xpeccy at ${XPECCY_SRC} is not xpeccy-plus.\n"
+		"VERSIONS pins ${XSP_XPECCY_REQUIRED}, which is what this is built and\n"
+		"tested against. Run python build.py to fetch it.\n"
+		"An upstream samstyle tree no longer compiles this adapter.")
 endif()
-unset(_xp_video_h)
+unset(_xp_spectrum_h)
 
 set(XPECCY_SRC "${XPECCY_SRC}" CACHE PATH "Path to the Xpeccy source tree" FORCE)
 set(XPECCY_INC "${XPECCY_SRC}/src")
 message(STATUS "Xpeccy core: ${XPECCY_SRC}")
 
 # Which release this actually is, read off the directory name, and whether it is
-# the one VERSIONS pins. The curscr probe above is only a floor: it accepts the
-# pinned release and everything after it alike, so a newer tree left on disk is
-# otherwise picked up without a word. That is how a build stops matching the one
-# the tests were written against, and the failure it produces later looks like a
-# bug in the server rather than a different emulator underneath it.
+# the one VERSIONS pins. The vidPage probe above is only a floor: it accepts the
+# pinned release and everything after it alike, so a newer tree left on disk used
+# to be picked up without a word. That is how a build stops matching the one the
+# tests were written against, and the failure it produces later looks like a bug
+# in the server rather than a different emulator underneath it.
 #
 # A warning and not an error, deliberately. Building against a patched or a newer
 # tree on purpose is a legitimate thing to do - the emulator's own GUI needs
@@ -124,7 +124,15 @@ message(STATUS "Xpeccy core: ${XPECCY_SRC}")
 # normal - and the version is baked into the binary either way, so any report
 # says which tree it came from.
 get_filename_component(_xp_dir "${XPECCY_SRC}" NAME)
-if(_xp_dir MATCHES "^Xpeccy-([0-9][0-9.]*[0-9])")
+if(EXISTS "${XPECCY_SRC}/VERSION")
+	# xpeccy-plus carries its release in a VERSION file, not the dir name - and
+	# it comes first, so a checkout downloaded as Xpeccy-<n>-plus still reads
+	# right. The recorded pin is that version with "-plus" appended.
+	file(STRINGS "${XPECCY_SRC}/VERSION" _xp_ver LIMIT_COUNT 1)
+	string(STRIP "${_xp_ver}" _xp_ver)
+	set(XSP_XPECCY_FOUND_VERSION "${_xp_ver}-plus")
+	unset(_xp_ver)
+elseif(_xp_dir MATCHES "^Xpeccy-([0-9][0-9.]*[0-9])")
 	set(XSP_XPECCY_FOUND_VERSION "${CMAKE_MATCH_1}")
 else()
 	set(XSP_XPECCY_FOUND_VERSION "unknown (${_xp_dir})")
@@ -144,17 +152,22 @@ if(NOT XSP_XPECCY_FOUND_VERSION STREQUAL XSP_XPECCY_REQUIRED)
 endif()
 unset(_xp_dir)
 
+# The plus core is not pure C any more: sound/ym-2203.cpp and the ymfm library
+# under it are C++ and are part of the chip table unconditionally.
 file(GLOB_RECURSE XPECCY_CORE_SOURCES "${XPECCY_SRC}/src/libxpeccy/*.c")
+file(GLOB_RECURSE XPECCY_CORE_CXX "${XPECCY_SRC}/src/libxpeccy/*.cpp")
 list(LENGTH XPECCY_CORE_SOURCES _xp_count)
-message(STATUS "Xpeccy core: ${_xp_count} C files")
+list(LENGTH XPECCY_CORE_CXX _xp_cxx_count)
+message(STATUS "Xpeccy core: ${_xp_count} C files, ${_xp_cxx_count} C++ files")
 
-add_library(xpeccy_core STATIC ${XPECCY_CORE_SOURCES})
+add_library(xpeccy_core STATIC ${XPECCY_CORE_SOURCES} ${XPECCY_CORE_CXX})
 
 target_include_directories(xpeccy_core PUBLIC
 	"${XPECCY_SRC}/src"
 	"${XPECCY_SRC}/src/libxpeccy")
 
-set_target_properties(xpeccy_core PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
+set_target_properties(xpeccy_core PROPERTIES C_STANDARD 99 C_EXTENSIONS ON
+	CXX_STANDARD 17 CXX_EXTENSIONS OFF)
 
 include(TestBigEndian)
 test_big_endian(XPECCY_BIG_ENDIAN)

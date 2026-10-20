@@ -68,7 +68,9 @@ void registerExecutionTools() {
 	     });
 
 	tool("step",
-	     "Execute N instructions, ignoring breakpoints. Use step_over instead when the next "
+	     "Execute N steps, ignoring breakpoints. A step is one instruction, or the CPU taking a "
+	     "pending interrupt - that runs no instruction and lands on the handler, and the reply "
+	     "counts it in `interrupts`, not `instructions`. Use step_over instead when the next "
 	     "instruction is a CALL you do not want to walk through, and step_out to finish the "
 	     "routine you are in.",
 	     json{{"properties", {{"count", {{"type", "integer"}, {"minimum", 1}}}}}},

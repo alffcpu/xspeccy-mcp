@@ -100,9 +100,7 @@ void registerVideoTools() {
 				     for (int i = 0; i < 2; i++) {
 					     xsp::FrameCost fc = mach().frameCost(-1, budget, false);
 					     if (!fc.complete) break;
-					     const long long w = mach().comp()->nsPerTick > 0
-						     ? fc.work_ns / mach().comp()->nsPerTick : 0;
-					     if (w > worst) worst = w;
+					     if (fc.work_t > worst) worst = fc.work_t;
 					     measured++;
 				     }
 			     }
@@ -226,12 +224,20 @@ void registerVideoTools() {
 
 
 		     const int delayCs = (int)(100.0 / outFps + 0.5);
-		     int written = 0;
+		     int written = 0, resampled = 0, dropped = 0;
 		     for (int i = 0; i < frames; i++) {
 			     mach().runFrames(1);
 			     if (i % nth) continue;
-			     auto f = xsp::video::capture(c, border, scale, blend);
-			     if (f.width != shot.width || f.height != shot.height) continue;	// geometry changed mid-recording
+			     // every frame at the first one's pixel width: a program
+			     // switching to a hires or text mode and back would
+			     // otherwise change the width under the encoder
+			     auto f = xsp::video::capture(c, border, scale, blend, nullptr,
+							  shot.pixelScale);
+			     if (xsp::video::frameScale(c) != shot.pixelScale) resampled++;
+			     if (f.width != shot.width || f.height != shot.height) {
+				     dropped++;		// the layout itself changed mid-recording
+				     continue;
+			     }
 			     bool ok = gif ? gifw.addFrame(f.rgba.data(), delayCs, err)
 					   : ff.addFrame(f.rgba.data(), f.rgba.size(), err);
 			     if (!ok) throw std::runtime_error(err);
@@ -292,6 +298,21 @@ void registerVideoTools() {
 			     {"audio", withAudio}
 		     };
 		     if (!audioNote.empty()) res["audio_note"] = audioNote;
+		     if (resampled)
+			     res["frames_resampled"] = {
+				     {"count", resampled},
+				     {"note", shot.pixelScale > 1
+					      ? "these frames were drawn in a full-dot mode and are shown "
+						"at the recording's double width, each pixel twice"
+					      : "these frames were drawn in a hires or text mode with two "
+						"pixels per dot and are shown at the recording's width, "
+						"first pixel of each pair. Start the recording in that "
+						"mode to keep both"}};
+		     if (dropped)
+			     res["frames_dropped"] = {
+				     {"count", dropped},
+				     {"note", "the screen geometry changed during the recording; "
+					      "frames of the other size are left out"}};
 		     if (!skipped.is_null()) res["skipped_to"] = skipped;
 		     if (!autoNth.is_null()) res["every_nth_auto"] = autoNth;
 		     if (bi.frames > 1) {

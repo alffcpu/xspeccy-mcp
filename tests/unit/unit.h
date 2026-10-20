@@ -87,6 +87,7 @@ std::string readWholeFile(const std::string& path);
 void test_args();
 void test_audio();
 void test_blend();
+void test_builtin();
 void test_config();
 void test_gif();
 void test_keyboard();

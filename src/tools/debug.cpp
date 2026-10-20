@@ -51,7 +51,9 @@ void registerDebugTools() {
 	     "memory cell, so it follows the bank; \"address\" puts it on the CPU address, so it "
 	     "fires whatever is paged in there. A banked label (\"05:200E main_loop\") or an explicit "
 	     "\"bank:offset\" arms that bank's cell even when the bank is not paged in right now - "
-	     "without one, cell scope can only mean whatever is mapped at the time.",
+	     "without one, cell scope can only mean whatever is mapped at the time. The bank must "
+	     "exist on this machine and the offset is $0000..$3FFF; bank FF is the symbol file's "
+	     "\"no bank\", so FF:8003 is the plain address $8003.",
 	     json{{"properties", {
 		     {"address", {{"type", "string"}, {"description", kAddrArg}}},
 		     {"access", {{"type", "string"}, {"description", "exec | read | write | \"read,write\""}}},
@@ -72,7 +74,9 @@ void registerDebugTools() {
 		     if (scope == "address") {
 			     mach().setBreakAddress(adr, flags);
 		     } else if (bank >= 0) {
-			     mach().setBreakBank(bank, adr, flags);
+			     std::string err;
+			     if (!mach().setBreakBank(bank, adr & 0x3fff, flags, err))
+				     throw std::runtime_error(err);
 			     out["bank"] = bank;
 			     out["bank_paged_in"] = (mach().bankAt(adr) == bank);
 		     } else {
@@ -91,7 +95,9 @@ void registerDebugTools() {
 	tool("set_port_breakpoint",
 	     "Break on an I/O port access. access: read, write or both. This is how paging and "
 	     "border writes are caught without knowing where in the code they happen: $7FFD for "
-	     "the 128K pager, $FE for border and beeper.",
+	     "the 128K pager, $FE for border and beeper. A port up to $FF matches its low byte "
+	     "under any high byte - $FE catches out ($FE),a whatever A is, as the ULA decodes it; "
+	     "a port above $FF matches those 16 bits exactly.",
 	     json{{"properties", {
 		     {"port", {{"type", "string"}, {"description", "port number, or a label/EQU name"}}},
 		     {"access", {{"type", "string"}}}
@@ -104,7 +110,8 @@ void registerDebugTools() {
 		     // A port has no fetch: the CPU never executes out of one.
 		     const unsigned char flags = accessFlags(acc, MEM_BRK_RD | MEM_BRK_WR, false);
 		     mach().setIoBreak(port, flags);
-		     return json{{"port", port}, {"access", acc}, {"ok", true}};
+		     return json{{"port", port}, {"access", acc},
+				 {"match", port <= 0xff ? "low byte" : "exact"}, {"ok", true}};
 	     });
 
 	// -------------------------------------------------- vision

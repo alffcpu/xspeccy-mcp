@@ -47,18 +47,65 @@ void registerMemoryTools() {
 	     });
 
 	tool("read_memory",
-	     "Read bytes as the CPU sees them (through the current page mapping). Returns decimal "
-	     "bytes plus a hex string.",
+	     "Read bytes as the CPU sees them (through the current page mapping). An address of the "
+	     "form \"bank:offset\" (both hex, as in a symbol file) reads that physical 16K RAM bank "
+	     "directly - paged in or not; the offset is $0000..$3FFF and the read must end inside "
+	     "the bank. Bank FF is the symbol file's \"no bank\": FF:8000 reads CPU address $8000. "
+	     "Returns decimal bytes plus a hex string.",
 	     json{{"properties", {
-		     {"address", {{"type", "string"}, {"description", kAddrArg}}},
+		     {"address", {{"type", "string"}, {"description", kAddrArg +
+			 std::string("; \"BB:OOOO\" reads a physical RAM bank (FF = a CPU address)")}}},
 		     {"length", {{"type", "integer"}, {"description", "default 16, max 16384"}}}
 	     }}, {"required", json::array({"address"})}},
 	     [](const json& a) {
-		     const int adr = argAddrRequired(a, "address");
+		     // required by the schema; the dispatch does not enforce it
+		     if (!a.contains("address"))
+			     throw std::runtime_error("address is required");
+		     // "bank:offset" is a physical page, not a CPU address: same two-hex-part
+		     // spelling a symbol file uses, same bank unit breakpoints take - and
+		     // bank FF is the symbol file's "no bank", a CPU address like any other
+		     int adr = 0, bank = -1;
+		     bool cpuAddr = true;
+		     if (a["address"].is_string()) {
+			     int b = -1, off = 0;
+			     if (parseBankOffset(a["address"].get<std::string>(), b, off)) {
+				     adr = off;
+				     if (b >= 0) {
+					     if (b >= mach().bankCount())
+						     throw std::runtime_error("no RAM bank " + std::to_string(b) +
+								      " (the machine has " +
+								      std::to_string(mach().bankCount()) + ")");
+					     bank = b;
+				     }
+				     cpuAddr = false;	// already read, and FF's number is in adr
+			     }
+		     }
 		     const int len = argNumRange(a, "length", 16, 1, 16384);
 		     json bytes = json::array();
 		     std::string hex;
 		     char buf[8];
+		     if (bank >= 0) {
+			     // Past the end of the bank is refused, not continued: the next
+			     // bank by number is not what comes next anywhere the CPU looks
+			     // (bank 5 at $4000 is followed by bank 2), so reading on into
+			     // it would hand back bytes from a neighbour the caller did not
+			     // mean - and wrapping to the bank's own start is worse.
+			     if (adr + len > 0x4000)
+				     throw std::runtime_error("length " + std::to_string(len) + " from offset " +
+							      hex16(adr) + " runs past the end of bank " +
+							      std::to_string(bank) + " ($4000 bytes); read "
+							      "the next bank with its own bank:offset");
+			     for (int i = 0; i < len; i++) {
+				     int b = mach().readBankByte(bank, adr + i);
+				     bytes.push_back(b);
+				     snprintf(buf, sizeof(buf), "%02X", b);
+				     if (i) hex += ' ';
+				     hex += buf;
+			     }
+			     return json{{"bank", bank}, {"offset", adr},
+					 {"offset_hex", hex16(adr)}, {"bytes", bytes}, {"hex", hex}};
+		     }
+		     if (cpuAddr) adr = argAddrRequired(a, "address");
 		     for (int i = 0; i < len; i++) {
 			     int b = mach().readByte(adr + i);
 			     bytes.push_back(b);

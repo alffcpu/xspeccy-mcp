@@ -5,15 +5,19 @@ namespace tools {
 
 Timing timing(Computer* c) {
 	Timing t;
-	if (c->nsPerTick > 0) {
-		t.tPerFrame = c->vid->nsPerFrame / c->nsPerTick;
-		t.tPerLine = c->vid->nsPerLine / c->nsPerTick;
-	}
-	if (c->cpuFrq > 0) {
-		t.nsPerT = 1000.0 / c->cpuFrq;			// cpuFrq is in MHz
-		t.nsPerFrame = t.nsPerT * t.tPerFrame;
-		if (t.tPerFrame > 0) t.fps = c->cpuFrq * 1e6 / t.tPerFrame;
-	}
+	if (c->nsPerTick <= 0) return t;
+	// the quotient is exact T-states arrived at through rounded ns:
+	// 228 T/line at 281.94 ns/T is 227.9 back - truncate and a ZX128
+	// reports 227 T/line against every table ever printed
+	t.tPerFrame = (int)llround(c->vid->nsPerFrame / c->nsPerTick);
+	t.tPerLine = (int)llround(c->vid->nsPerLine / c->nsPerTick);
+	// nsPerTick IS the effective tick - comp_update_timings already divided
+	// the base clock by turbo and hardware multipliers - so the wall-clock
+	// figures come from it. Deriving them from cpuFrq quoted the base clock
+	// for a machine actually running twice as fast.
+	t.nsPerT = c->nsPerTick;
+	t.nsPerFrame = t.nsPerT * t.tPerFrame;
+	if (t.tPerFrame > 0) t.fps = 1e9 / t.nsPerFrame;
 	return t;
 }
 
@@ -28,15 +32,38 @@ Timing timing(Computer* c) {
 // the machine the GUI would have booted. 0 means "we do not claim to know this
 // one's raster", and nothing is said.
 static int canonicalFrameT(const std::string& model) {
-	if (model == "ZX48K" || model == "Scorpion") return 69888;		// 312 lines x 224 T
-	if (model == "Spectrum +2" || model == "Spectrum +3") return 70908;	// 311 x 228
-	if (model == "Pentagon" || model == "Pentagon1024SL") return 71680;	// 320 x 224
+	// model() is the core's hardware name; the frame length is the geometry's
+	// (res/layouts.conf: lines x dots where the dots count in half-T units).
+	// A definition already pinned its own geometry through applyLayout, so
+	// this only adjudicates machines addressed by hardware name alone.
+	if (model == "ZX48" || model == "ZX48K" || model == "Scorpion" ||
+	    model == "ATM2" || model == "ALF" || model == "Profi")
+		return 69888;			// 312-line geometries: ULA.48/Scorpion/ATM2/Profi5
+	if (model == "ZX128" || model == "Plus2A" || model == "Plus3" ||
+	    model == "Spectrum +2" || model == "Spectrum +2A" || model == "Spectrum +3")
+		return 70908;			// ULA.128/Plus3: 311 x 228
+	if (model == "ScorpionTP")
+		return 70784;			// ULA.ScorpionTP: 316 x 224
+	if (model == "Pentagon" || model == "P1024" || model == "Pentagon1024SL" ||
+	    model == "Baseconf" || model == "PentEvo" || model == "Profi3" ||
+	    model == "Phoenix" || model == "TSConf")
+		return 71680;			// 320-line geometries: Pentagon/Evo/TSConf/Profi
 	return 0;
 }
 
 std::string geometryWarning(const Timing& tm) {
-	int want = canonicalFrameT(mach().model());
-	if (!want || !tm.tPerFrame || want == tm.tPerFrame) return "";
+	int canonical = canonicalFrameT(mach().model());
+	if (!canonical || !tm.tPerFrame) return "";
+	// the canonical figure is a base-clock T-state count, and tPerFrame is
+	// counted in the effective tick - under turbo the same raster needs
+	// twice the ticks, which is correct timing, not a wrong geometry
+	Computer* c = mach().comp();
+	int want = canonical;
+	if (c->nsPerTick > 0 && c->cpuFrq > 0) {
+		const double scale = (1000.0 / c->cpuFrq) / c->nsPerTick;
+		want = (int)llround(canonical * scale);
+	}
+	if (want == tm.tPerFrame) return "";
 	char buf[512];
 	snprintf(buf, sizeof(buf),
 		 "geometry '%s' gives %d T per frame, but a %s runs %d - timings here are "
@@ -54,8 +81,6 @@ const char* diskInterfaceName(int type) {
 	switch (type) {
 		case DIF_BDI: return "Beta Disk (TR-DOS)";
 		case DIF_P3DOS: return "+3 uPD765";
-		case DIF_PC: return "PC";
-		case DIF_SMK512: return "SMK512";
 		default: return "none";
 	}
 }
@@ -74,6 +99,7 @@ json machineStateJson() {
 	}
 	json out = {
 		{"model", mach().model()},
+		{"machine", mach().machineDefId()},	// "" when no definition applied
 		{"memory_kb", mach().memoryKb()},
 		{"romset", mach().romset()},
 		{"geometry", mach().layout()},
@@ -84,7 +110,7 @@ json machineStateJson() {
 		{"pc", cpu_get_pc(c->cpu)},
 		{"pc_hex", hex16(cpu_get_pc(c->cpu))},
 		{"t_states_frame", c->frmtCount},
-		{"screen", {{"width", c->vid->vsze.x}, {"height", c->vid->vsze.y}}},
+		{"screen", {{"width", c->vid->vsze.x * video::frameScale(c)}, {"height", c->vid->vsze.y}}},
 		{"disk_interface", diskInterfaceName(c->dif->type)},
 		{"memory_map", pages}
 	};
