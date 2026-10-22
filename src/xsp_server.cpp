@@ -172,9 +172,13 @@ const Tool* findTool(const std::string& name) {
 
 // ------------------------------------------------------------ replies
 
+bool g_prettyPayload = false;
+
 json okResult(const json& payload) {
 	return json{
-		{"content", json::array({json{{"type", "text"}, {"text", payload.dump(1, '\t')}}})},
+		{"content", json::array({json{{"type", "text"},
+					    {"text", g_prettyPayload ? payload.dump(1, '\t')
+								     : payload.dump()}}})},
 		{"isError", false}
 	};
 }

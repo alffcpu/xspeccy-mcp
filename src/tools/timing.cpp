@@ -78,7 +78,7 @@ void registerTimingTools() {
 			     }},
 			     {"interrupt", {{"position", v->intp.y}, {"length_t", v->intsize}}}
 		     };
-		     std::string warn = geometryWarning(tm);
+		     std::string warn = geometryNotice(tm);
 		     if (!warn.empty()) out["warning"] = warn;
 		     return out;
 	     });
@@ -164,7 +164,7 @@ void registerTimingTools() {
 		     };
 		     if (!skipped.is_null()) out["skipped_to"] = skipped;
 		     // the budget and the headroom are only as right as the frame length
-		     std::string warn = geometryWarning(tm);
+		     std::string warn = geometryNotice(tm);
 		     if (!warn.empty()) out["warning"] = warn;
 		     return out;
 	     });
@@ -452,22 +452,27 @@ void registerTimingTools() {
 			     throw std::runtime_error("action must be enable, disable, clear or dump");
 		     }
 
-		     json watched = json::array();
-		     for (int adr : rl.watched()) {
-			     json w{{"address", adr}, {"address_hex", hex16(adr)}};
-			     if (const std::string* lab = mach().labels().atAddress(adr))
-				     w["label"] = *lab;
-			     watched.push_back(w);
-		     }
 		     json res{{"running", rl.on}, {"capacity", (int)rl.capacity},
-			      {"events_total", rl.total}, {"watching", watched}};
+			      {"events_total", rl.total}};
+		     // the watch list matters when it is being set or read back; a
+		     // clear/disable answer has no use for it
+		     if (action == "enable" || action == "dump") {
+			     json watched = json::array();
+			     for (int adr : rl.watched()) {
+				     json w{{"address_hex", hex16(adr)}};
+				     if (const std::string* lab = mach().labels().atAddress(adr))
+					     w["label"] = *lab;
+				     watched.push_back(w);
+			     }
+			     res["watching"] = watched;
+		     }
 
 		     if (action == "dump") {
 			     std::vector<xsp::BeamLog::Event> evs =
 				     rl.dump((size_t)argNumRange(a, "count", 64, 1, 1 << 20));
 			     json list = json::array();
 			     for (const auto& e : evs)
-				     list.push_back({{"address", e.pc}, {"address_hex", hex16(e.pc)},
+				     list.push_back({{"address_hex", hex16(e.pc)},
 						     {"frame_counter", e.frame},
 						     {"t_states_frame", e.t},
 						     {"line", e.line}, {"dot", e.dot}});
@@ -543,7 +548,7 @@ void registerTimingTools() {
 					     // constant offset of the pass and drift accumulating
 					     // inside it. That is two numbers, not one entry per
 					     // position, and a 48-strip loop has 48 of those.
-					     json s{{"address", pc}, {"address_hex", hex16(pc)},
+					     json s{{"address_hex", hex16(pc)},
 						    {"hits", kv.second},
 						    {"frames", (long long)perFrame[pc].size()},
 						    {"hits_per_frame_min", pfLo},

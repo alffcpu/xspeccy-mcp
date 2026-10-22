@@ -1,5 +1,7 @@
 #include "tools/common.h"
 
+#include <set>
+
 namespace xsp {
 namespace tools {
 
@@ -51,7 +53,7 @@ static int canonicalFrameT(const std::string& model) {
 	return 0;
 }
 
-std::string geometryWarning(const Timing& tm) {
+std::string geometryWarning(const Timing& tm, bool brief) {
 	int canonical = canonicalFrameT(mach().model());
 	if (!canonical || !tm.tPerFrame) return "";
 	// the canonical figure is a base-clock T-state count, and tPerFrame is
@@ -65,14 +67,32 @@ std::string geometryWarning(const Timing& tm) {
 	}
 	if (want == tm.tPerFrame) return "";
 	char buf[512];
-	snprintf(buf, sizeof(buf),
-		 "geometry '%s' gives %d T per frame, but a %s runs %d - timings here are "
-		 "%+.1f%% out. The raster comes from the geometry, not from the model: name one "
-		 "whose height matches (machine_config {\"geometry\": ...}), or read these numbers "
-		 "as the geometry's rather than the machine's.",
-		 mach().layout().c_str(), tm.tPerFrame, mach().model().c_str(), want,
-		 100.0 * (tm.tPerFrame - want) / (double)want);
+	if (brief)
+		snprintf(buf, sizeof(buf),
+			 "geometry '%s' gives %d T per frame, a %s runs %d: timings %+.1f%% out",
+			 mach().layout().c_str(), tm.tPerFrame, mach().model().c_str(), want,
+			 100.0 * (tm.tPerFrame - want) / (double)want);
+	else
+		snprintf(buf, sizeof(buf),
+			 "geometry '%s' gives %d T per frame, but a %s runs %d - timings here are "
+			 "%+.1f%% out. The raster comes from the geometry, not from the model: name one "
+			 "whose height matches (machine_config {\"geometry\": ...}), or read these numbers "
+			 "as the geometry's rather than the machine's.",
+			 mach().layout().c_str(), tm.tPerFrame, mach().model().c_str(), want,
+			 100.0 * (tm.tPerFrame - want) / (double)want);
 	return buf;
+}
+
+std::string geometryNotice(const Timing& tm) {
+	const std::string full = geometryWarning(tm);
+	if (full.empty()) return full;
+	// The explanation is worth its full wording once; after that the facts
+	// alone. The short form still names both figures and the error, because
+	// "said earlier" is no use to a reader who never saw it - a subagent on
+	// the same server, or a conversation whose start has been summarized.
+	static std::set<std::string> said;
+	if (said.insert(full).second) return full;
+	return geometryWarning(tm, true);
 }
 
 // The disk controller the machine is wired with. Worth reporting: a ZX machine without one
@@ -91,10 +111,16 @@ json machineStateJson() {
 	json pages = json::array();
 	for (int a = 0; a < 0x10000; a += 0x4000) {
 		xAdr xa = mem_get_xadr(c->mem, a);
+		// xa.bank is the core's page number in units of its page size (256
+		// bytes on a 16-bit bus), not the 16K bank a bank:offset address or a
+		// symbol file names. The absolute address divided by 16K is that bank
+		// whatever the page size - the same sum Machine::bankAt() does.
+		const int bank16 = (xa.type == MEM_ROM || xa.type == MEM_RAM) ? xa.abs / 0x4000
+									  : xa.bank;
 		pages.push_back({
 			{"cpu_address", hex16(a)},
 			{"type", xa.type == MEM_ROM ? "rom" : (xa.type == MEM_RAM ? "ram" : "other")},
-			{"bank", xa.bank}
+			{"bank", bank16}
 		});
 	}
 	json out = {
@@ -114,7 +140,7 @@ json machineStateJson() {
 		{"disk_interface", diskInterfaceName(c->dif->type)},
 		{"memory_map", pages}
 	};
-	std::string warn = geometryWarning(tm);
+	std::string warn = geometryNotice(tm);
 	if (!warn.empty()) out["warning"] = warn;
 	return out;
 }

@@ -163,6 +163,9 @@ lives next to `xpeccy.exe`). Without one it boots the shipped Pentagon machine d
 128K, the Pentagon ROMs with TR-DOS, Beta Disk and an AY - on ROMs compiled into the binary,
 so it works on a machine that has never seen Xpeccy.
 
+Tool replies are compact JSON, which is what a model reads cheapest; `--pretty` indents them
+for a person watching the wire.
+
 ## What it does not do
 
 Writing files into a TR-DOS disk image, RZX playback, breakpoint conditions (`A == 5`) and

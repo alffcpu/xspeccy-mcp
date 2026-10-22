@@ -96,20 +96,20 @@ expect() {	# expect <label> <id> <pattern> [absent-pattern]
 # A server with no configuration starts on the Pentagon definition: 128K, its
 # own geometry, TR-DOS and an AY - and says so, rather than naming the
 # profile's romset and geometry, which a definition never uses.
-expect "default: the Pentagon definition"    8 '"machine\\": \\"pent'
-expect "default: 128K"                       8 'memory_kb\\": 128,'
+expect "default: the Pentagon definition"    8 '"machine\\": *\\"pent'
+expect "default: 128K"                       8 'memory_kb\\": *128,'
 expect "default: Pentagon geometry"          8 'ULA\.Pentagon'
 expect "default: TR-DOS"                     8 'Beta Disk (TR-DOS)'
 expect "default: names its definition"       8 "machine definition 'pent'" 'romset=ZX48'
-expect "default: an AY"                      9 'present\\": true'
+expect "default: an AY"                      9 'present\\": *true'
 expect "relocated: ZX48 on its own geometry" 2 'ULA\.48' '"warning'
-expect "relocated: ZX48 at 69888 T a frame"  2 'per_frame\\": 69888'
-expect "relocated: zx48 definition known"    3 '"machine\\": \\"zx48'
-expect "relocated: evo-tsconf known"         4 '"machine\\": \\"evo-tsconf'
+expect "relocated: ZX48 at 69888 T a frame"  2 'per_frame\\": *69888'
+expect "relocated: zx48 definition known"    3 '"machine\\": *\\"zx48'
+expect "relocated: evo-tsconf known"         4 '"machine\\": *\\"evo-tsconf'
 expect "relocated: evo-tsconf geometry"      4 'ULA\.TSConf'
 if [ $ROMS_BUILTIN -eq 1 ]; then
-	expect "default: on the Pentagon's own roms" 8 'romset\\": \\"machine:pent' 'roms: fell back'
-	expect "relocated: Pentagon on its own roms" 5 'romset\\": \\"machine:pent' 'roms: fell back'
+	expect "default: on the Pentagon's own roms" 8 'romset\\": *\\"machine:pent' 'roms: fell back'
+	expect "relocated: Pentagon on its own roms" 5 'romset\\": *\\"machine:pent' 'roms: fell back'
 	# the GS firmware and the text font are roms too, loaded by name
 	expect "relocated: Pentagon has its GS rom"  5 'machine:pent' 'gs rom'
 	expect "relocated: evo-tsconf has its font"  4 'evo-tsconf' "font '"

@@ -51,16 +51,24 @@ void registerMemoryTools() {
 	     "form \"bank:offset\" (both hex, as in a symbol file) reads that physical 16K RAM bank "
 	     "directly - paged in or not; the offset is $0000..$3FFF and the read must end inside "
 	     "the bank. Bank FF is the symbol file's \"no bank\": FF:8000 reads CPU address $8000. "
-	     "Returns decimal bytes plus a hex string.",
+	     "The bytes come back as a hex string by default; format:\"bytes\" returns a decimal "
+	     "array instead, format:\"both\" returns both.",
 	     json{{"properties", {
 		     {"address", {{"type", "string"}, {"description", kAddrArg +
 			 std::string("; \"BB:OOOO\" reads a physical RAM bank (FF = a CPU address)")}}},
-		     {"length", {{"type", "integer"}, {"description", "default 16, max 16384"}}}
+		     {"length", {{"type", "integer"}, {"description", "default 16, max 16384"}}},
+		     {"format", {{"type", "string"}, {"description", "hex (default) | bytes | both"}}}
 	     }}, {"required", json::array({"address"})}},
 	     [](const json& a) {
 		     // required by the schema; the dispatch does not enforce it
 		     if (!a.contains("address"))
 			     throw std::runtime_error("address is required");
+		     const std::string format = argStr(a, "format", "hex");
+		     if (format != "hex" && format != "bytes" && format != "both")
+			     throw std::runtime_error("format must be hex, bytes or both, not '" +
+						      format + "'");
+		     const bool wantHex = format != "bytes";
+		     const bool wantArr = format != "hex";
 		     // "bank:offset" is a physical page, not a CPU address: same two-hex-part
 		     // spelling a symbol file uses, same bank unit breakpoints take - and
 		     // bank FF is the symbol file's "no bank", a CPU address like any other
@@ -84,6 +92,17 @@ void registerMemoryTools() {
 		     json bytes = json::array();
 		     std::string hex;
 		     char buf[8];
+		     auto collect = [&](const std::function<int(int)>& read) {
+			     for (int i = 0; i < len; i++) {
+				     const int b = read(i);
+				     if (wantArr) bytes.push_back(b);
+				     if (wantHex) {
+					     snprintf(buf, sizeof(buf), "%02X", b);
+					     if (i) hex += ' ';
+					     hex += buf;
+				     }
+			     }
+		     };
 		     if (bank >= 0) {
 			     // Past the end of the bank is refused, not continued: the next
 			     // bank by number is not what comes next anywhere the CPU looks
@@ -95,25 +114,18 @@ void registerMemoryTools() {
 							      hex16(adr) + " runs past the end of bank " +
 							      std::to_string(bank) + " ($4000 bytes); read "
 							      "the next bank with its own bank:offset");
-			     for (int i = 0; i < len; i++) {
-				     int b = mach().readBankByte(bank, adr + i);
-				     bytes.push_back(b);
-				     snprintf(buf, sizeof(buf), "%02X", b);
-				     if (i) hex += ' ';
-				     hex += buf;
-			     }
-			     return json{{"bank", bank}, {"offset", adr},
-					 {"offset_hex", hex16(adr)}, {"bytes", bytes}, {"hex", hex}};
+			     collect([&](int i) { return mach().readBankByte(bank, adr + i); });
+			     json res{{"bank", bank}, {"offset", adr}, {"offset_hex", hex16(adr)}};
+			     if (wantArr) res["bytes"] = bytes;
+			     if (wantHex) res["hex"] = hex;
+			     return res;
 		     }
 		     if (cpuAddr) adr = argAddrRequired(a, "address");
-		     for (int i = 0; i < len; i++) {
-			     int b = mach().readByte(adr + i);
-			     bytes.push_back(b);
-			     snprintf(buf, sizeof(buf), "%02X", b);
-			     if (i) hex += ' ';
-			     hex += buf;
-		     }
-		     return json{{"address", adr}, {"address_hex", hex16(adr)}, {"bytes", bytes}, {"hex", hex}};
+		     collect([&](int i) { return mach().readByte(adr + i); });
+		     json res{{"address", adr}, {"address_hex", hex16(adr)}};
+		     if (wantArr) res["bytes"] = bytes;
+		     if (wantHex) res["hex"] = hex;
+		     return res;
 	     });
 
 	tool("write_memory",
@@ -203,11 +215,12 @@ void registerMemoryTools() {
 				     if (b) hex += ' ';
 				     hex += buf;
 			     }
+			     // A listing row carries each fact once, in the spelling it is
+			     // written back in: the address as $hex (the decimal twin was a
+			     // quarter of every row), the length as the bytes themselves
 			     json line{
-				     {"address", adr},
 				     {"address_hex", hex16(adr)},
 				     {"text", text},
-				     {"length", len},
 				     {"bytes", hex}
 			     };
 			     if (const std::string* lab = mach().labels().atAddress(adr))
@@ -215,7 +228,7 @@ void registerMemoryTools() {
 			     if (const auto* src = mach().listing().atAddress(adr))
 				     line["source"] = src->text;
 			     if (mn.oadr >= 0) {
-				     line["target"] = mn.oadr;
+				     line["target_hex"] = hex16(mn.oadr);
 				     if (const std::string* lab = mach().labels().atAddress(mn.oadr))
 					     line["target_label"] = *lab;
 			     }
@@ -277,26 +290,28 @@ void registerMemoryTools() {
 		     int next = adr;
 		     bool ok = true;
 		     for (const auto& l : res) {
-			     json hexBytes = json::array();
 			     std::string hex;
 			     char buf[8];
 			     for (size_t i = 0; i < l.bytes.size(); i++) {
 				     snprintf(buf, sizeof(buf), "%02X", l.bytes[i]);
 				     if (i) hex += ' ';
 				     hex += buf;
-				     hexBytes.push_back(l.bytes[i]);
 			     }
-			     out.push_back({{"address", l.address}, {"address_hex", hex16(l.address)},
-					    {"text", l.text}, {"bytes", hexBytes}, {"hex", hex},
-					    {"ok", l.ok}, {"error", l.error}});
+			     json line{{"address_hex", hex16(l.address)},
+				       {"text", l.text}, {"hex", hex}, {"ok", l.ok}};
+			     if (!l.error.empty()) line["error"] = l.error;
+			     out.push_back(line);
 			     if (l.ok) next = l.address + (int)l.bytes.size();
 			     else ok = false;
 		     }
-		     json labels = json::object();
-		     for (const auto& kv : defined)
-			     labels[kv.first] = {{"address", kv.second}, {"address_hex", hex16(kv.second)}};
-		     return json{{"lines", out}, {"next_address", next}, {"ok", ok},
-			     {"labels", labels}};
+		     json res2{{"lines", out}, {"next_address", next}, {"ok", ok}};
+		     if (!defined.empty()) {
+			     json labels = json::object();
+			     for (const auto& kv : defined)
+				     labels[kv.first] = {{"address_hex", hex16(kv.second)}};
+			     res2["labels"] = labels;
+		     }
+		     return res2;
 	     });
 
 	// -------------------------------------------------- breakpoints

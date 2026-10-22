@@ -200,7 +200,8 @@ void registerMachineTools() {
 	     "value came from. Without arguments it reports all of them, which is the way to answer "
 	     "\"what machine am I actually running\" - several of these were fixed in the source "
 	     "before and could not be seen at all, so a server could quietly differ from the "
-	     "emulator's own configuration. action: report (default), set, reset.\n"
+	     "emulator's own configuration. `name` with report returns just that one row. "
+	     "action: report (default), set, reset.\n"
 	     "\n"
 	     "`set` changes one for the session; `save: true` also writes it into a settings file, "
 	     "so a project keeps its machine in its own repository and every session starts the "
@@ -209,7 +210,8 @@ void registerMachineTools() {
 	     "frame_cost, profile and beam_log measured before it, and the reply says so.",
 	     json{{"properties", {
 		     {"action", {{"type", "string"}, {"description", "report (default) | set | reset"}}},
-		     {"name", {{"type", "string"}, {"description", "setting name, e.g. timing.contPattern"}}},
+		     {"name", {{"type", "string"}, {"description", "setting name, e.g. timing.contPattern; "
+			       "with report, limits the list to this one row"}}},
 		     {"value", {{"description", "new value; enums by name, booleans as yes/no"}}},
 		     {"save", {{"type", "boolean"}, {"description",
 			       "with set, also write it to the settings file"}}},
@@ -249,10 +251,21 @@ void registerMachineTools() {
 
 		     if (action == "report") {
 			     json rows = json::array();
-			     for (const auto& s : st::table()) rows.push_back(describe(s));
+			     // One name asked for = one row back; the whole table is for
+			     // "what can this even do" questions, not for checking a value.
+			     const std::string only = argStr(a, "name", "");
+			     if (!only.empty()) {
+				     const st::Setting* s = st::find(only);
+				     if (!s) throw std::runtime_error("no such setting: " + only +
+								      " (call settings with no "
+								      "arguments for the list)");
+				     rows.push_back(describe(*s));
+			     } else {
+				     for (const auto& s : st::table()) rows.push_back(describe(s));
+			     }
 			     return json{
 				     {"settings", rows},
-				     {"count", (int)st::table().size()},
+				     {"count", (int)rows.size()},
 				     {"settings_file", st::defaultSavePath(mach().env().confDir)},
 				     {"xpeccy_config", mach().env().confDir},
 				     {"note", "settings fixed when the server was built are not "

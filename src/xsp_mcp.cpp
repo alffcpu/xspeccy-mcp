@@ -17,7 +17,7 @@ namespace server = xsp::server;
 namespace tools = xsp::tools;
 
 static const char* const kUsage =
-	"usage: xspeccy-mcp [--config <xpeccy config dir>] [--settings <file>]\n"
+	"usage: xspeccy-mcp [--config <xpeccy config dir>] [--settings <file>] [--pretty]\n"
 	"       xspeccy-mcp --version\n";
 
 int main(int argc, char** argv) {
@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
 			settingsPath = argv[++i];
 		}
 		else if (a.compare(0, 11, "--settings=") == 0) settingsPath = a.substr(11);
+		else if (a == "--pretty") server::g_prettyPayload = true;
 		else {
 			// Anything else is a mistake worth stopping for. Ignoring it means
 			// a mistyped --setings starts a server with different settings than

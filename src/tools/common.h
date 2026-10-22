@@ -67,7 +67,12 @@ Timing timing(Computer* c);
 
 // Said whenever the geometry's raster is not the one the named model runs, which
 // is a 2.5% error that otherwise reads as a real measurement.
-std::string geometryWarning(const Timing& tm);
+std::string geometryWarning(const Timing& tm, bool brief = false);
+
+// The geometry warning for a reply: the full explanation the first time this
+// server says a given one, the short form - still naming both frame lengths
+// and the error - every time after.
+std::string geometryNotice(const Timing& tm);
 
 const char* diskInterfaceName(int type);
 json machineStateJson();

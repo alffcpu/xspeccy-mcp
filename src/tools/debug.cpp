@@ -142,7 +142,7 @@ void registerDebugTools() {
 			     for (int pc : t.dump((size_t)argNumRange(a, "count", 32, 1, 4096))) {
 				     int len = 0;
 				     xMnem mn;
-				     json e{{"address", pc}, {"address_hex", hex16(pc)},
+				     json e{{"address_hex", hex16(pc)},
 					    {"text", mach().disasm(pc, &len, &mn)}};
 				     if (const std::string* lab = mach().labels().atAddress(pc))
 					     e["label"] = *lab;

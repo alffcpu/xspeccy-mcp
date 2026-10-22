@@ -13,11 +13,9 @@ void registerAudioTools() {
 	     [](const json& a) {
 		     auto st = xsp::audio::ayState(mach().comp(), argNumOr(a, "chip", 0));
 		     if (!st.present) return json{{"present", false}};
-		     json regs = json::array();
 		     std::string hex;
 		     char buf[8];
 		     for (int i = 0; i < 16; i++) {
-			     regs.push_back(st.reg[i]);
 			     snprintf(buf, sizeof(buf), "%02X", st.reg[i]);
 			     if (i) hex += ' ';
 			     hex += buf;
@@ -35,7 +33,7 @@ void registerAudioTools() {
 		     }
 		     return json{
 			     {"present", true}, {"chip", st.chip}, {"frq_mhz", st.frq_mhz},
-			     {"registers", regs}, {"registers_hex", hex},
+			     {"registers_hex", hex},
 			     {"channels", chans},
 			     {"noise", {{"period", st.noise_period}, {"hz", st.noise_hz}}},
 			     {"envelope", {{"period", st.env_period}, {"hz", st.env_hz}, {"shape", st.env_shape}}},

@@ -23,6 +23,11 @@ than replaced by the default.
 Every tool returns JSON as text. A failing tool returns `isError: true` with the reason and
 leaves the machine running - the server does not die on a bad call.
 
+A single address in a reply comes as a pair, `pc` and `pc_hex`, `address` and `address_hex`.
+In a list - `trace`, `disassemble`, `assemble`, `beam_log` events, `source_at`, the
+`resolve_symbol` table, the `load_labels` sample - each row carries the `$hex` form alone: the
+decimal twin was a quarter of every row, and `$hex` is what goes back into an argument.
+
 ---
 
 ## Machine
@@ -32,7 +37,7 @@ romset, RAM size and screen geometry come from the profile Xpeccy itself would b
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `settings` | `action`, `name`, `value`, `save`, `path` | Every emulator setting this server can change, what it is set to, where that value came from, and what changing it costs. No arguments reports all of them. |
+| `settings` | `action`, `name`, `value`, `save`, `path` | Every emulator setting this server can change, what it is set to, where that value came from, and what changing it costs. No arguments reports all of them; `name` with `report` returns just that one row. |
 | `machine_config` | `model`, `memory`, `romset`, `geometry`, `boot_frames` | Read or change the machine. `model` takes a hardware name or a machine-definition id (`zxplus2`, `evo-tsconf`) - several definitions can share one hardware, and the id picks exactly one. Any change resets and re-boots it, and the reply describes the machine after the boot. An unknown `romset` or `geometry` is refused before anything changes; a step that fails after others went through (a romset whose files cannot be read) still resets, and the error lists what was applied. No arguments = report the current setup. |
 | `list_models` | - | Every hardware name the core supports, the loaded machine definitions (`machines`: id, display name, hardware), plus the romsets and geometries defined in the configuration. |
 | `machine_state` | - | Model, the machine definition applied (`machine`), RAM, romset, CPU and clock, frame timing, screen size, the disk controller, and which ROM/RAM bank is visible at `$0000/$4000/$8000/$C000`. |
@@ -87,7 +92,7 @@ profiler wrapped around it.
 |---|---|---|
 | `get_registers` | - | Main and shadow registers, the flags string, IM/IFF, halt state, T-states into the frame. |
 | `set_register` | **`name`**, **`value`** | Set one register by the name `get_registers` reports. |
-| `read_memory` | **`address`**, `length` | Read as the CPU sees it, through the current paging. `"bank:offset"` (both hex, like a symbol file) reads a physical 16K RAM bank directly, paged in or not. `FF:` means "no bank", as in a symbol file, and reads the CPU address. A bank past the machine's RAM, an offset past `$3FFF` and a read that would run off the end of the bank are refused rather than wrapped: the next bank by number is not what follows in CPU space. Returns bytes and a hex string. |
+| `read_memory` | **`address`**, `length`, `format` | Read as the CPU sees it, through the current paging. `"bank:offset"` (both hex, like a symbol file) reads a physical 16K RAM bank directly, paged in or not. `FF:` means "no bank", as in a symbol file, and reads the CPU address. A bank past the machine's RAM, an offset past `$3FFF` and a read that would run off the end of the bank are refused rather than wrapped: the next bank by number is not what follows in CPU space. Returns a hex string by default; `format:"bytes"` returns a decimal array, `format:"both"` returns both. |
 | `write_memory` | **`address`**, `bytes` or `hex` | Write through the CPU mapping. Writes to a ROM page are dropped by the hardware - read back if it matters. |
 | `find_bytes` | **`pattern`**, `from`, `to` | Search the address space for a hex pattern (`"3E 05 C9"`). Returns the first address or −1. |
 
@@ -95,7 +100,7 @@ profiler wrapped around it.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `disassemble` | `address`, `count`, `t_states` | Disassemble from an address (default PC). Each line carries text, length, raw bytes, jump target, and - when loaded - the label and the original source line. |
+| `disassemble` | `address`, `count`, `t_states` | Disassemble from an address (default PC). Each line carries `address_hex`, text, the raw `bytes`, the jump target as `target_hex`, and - when loaded - the label and the original source line. |
 | `assemble` | **`address`**, `lines` or `text`, `write` | Assemble Z80 mnemonics and write them to memory. Numbers may be decimal, `0x`, `$` or `#`; labels work once `load_labels` has run, and the block may define its own. Stops at the first line that fails. |
 
 ```jsonc
@@ -666,7 +671,11 @@ the *separate* `geometry` argument: `machine_config {"model": "ZX48", "geometry"
 wrong.
 
 `machine_config`, `machine_state`, `frame_timing` and `frame_cost` say so, in a `warning`
-field naming both figures. The machine is left exactly as configured - the fix is yours to
+field naming both figures. The explanation comes in full the first time the server says a
+given warning; after that the `warning` is one line with the same figures and the error
+(`geometry 'ULA.Pentagon' gives 71680 T per frame, a ZX48 runs 69888: timings +2.6% out`),
+so a reader who never saw the first one - a subagent on the same server, a conversation
+whose start was summarized - still gets the facts. The machine is left exactly as configured - the fix is yours to
 make, by naming a geometry whose height matches:
 
 ```jsonc
@@ -686,7 +695,7 @@ if it fits in one frame, 24.4 Hz if it takes two. `profile` returns `t_states_pe
 | Tool | Arguments | What it does |
 |---|---|---|
 | `audio_capture` | `frames`, `rate`, `path`, `watch_ay`, `max_writes` | Run N frames while sampling the mixed output. Reports whether there is any sound, peak and RMS, a zero-crossing pitch estimate, beeper toggles, and which source dominates. `path` writes a `.wav`; `watch_ay` logs register writes. |
-| `ay_state` | `chip` | The AY/YM decoded: per channel the tone period as a frequency, volume, mixer bits and envelope flag; plus noise, envelope and an `audible` summary. |
+| `ay_state` | `chip` | The AY/YM decoded: raw registers as a hex string, and per channel the tone period as a frequency, volume, mixer bits and envelope flag; plus noise, envelope and an `audible` summary. |
 | `sound_state` | - | Every source at once: beeper, both AY chips of a Turbo Sound pair, General Sound, SAA1099, tape, and the current mixed output level. |
 | `ay_writes` | `offset`, `limit` | Page through the AY register writes recorded by the last `audio_capture` with `watch_ay` on - each with the frame, T-state and the PC that made it. |
 

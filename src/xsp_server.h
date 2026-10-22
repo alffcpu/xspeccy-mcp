@@ -50,6 +50,11 @@ const Tool* findTool(const std::string& name);
 json okResult(const json& payload);
 json errResult(const std::string& msg);
 
+// Tool payloads are written compact: the reader on the other end is a model
+// parsing JSON, and indentation is tokens the model does not need. --pretty
+// flips this for a human watching the wire.
+extern bool g_prettyPayload;
+
 // The reply to one request, or a null json for a notification that takes none.
 json dispatch(const json& request);
 

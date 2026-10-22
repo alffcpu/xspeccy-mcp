@@ -25,7 +25,7 @@ void registerSourceTools() {
 			     const std::string key = e.bank < 0 ? "cpu" : std::to_string(e.bank);
 			     banks[key] = banks.value(key, 0) + 1;
 			     if (n++ >= 10) continue;
-			     sample.push_back({{"name", e.name}, {"address", e.address},
+			     sample.push_back({{"name", e.name},
 					       {"address_hex", hex16(e.address)}, {"bank", e.bank}});
 		     }
 		     return json{{"path", mach().labels().source()},
@@ -57,7 +57,7 @@ void registerSourceTools() {
 		     }
 		     json all = json::array();
 		     for (const auto& e : lab.all())
-			     all.push_back({{"name", e.name}, {"address", e.address},
+			     all.push_back({{"name", e.name},
 					    {"address_hex", hex16(e.address)}, {"bank", e.bank}});
 		     return json{{"count", (int)lab.size()}, {"labels", all}, {"source", lab.source()}};
 	     });
@@ -90,7 +90,7 @@ void registerSourceTools() {
 		     const auto* here = mach().listing().coveringAddress(adr);
 		     json out = json::array();
 		     for (const auto& l : lines)
-			     out.push_back({{"address", l.address}, {"address_hex", hex16(l.address)},
+			     out.push_back({{"address_hex", hex16(l.address)},
 					    {"line", l.line}, {"file", l.file}, {"text", l.text},
 					    {"current", here && l.line == here->line && l.file == here->file}});
 		     return json{{"address", adr}, {"address_hex", hex16(adr)},

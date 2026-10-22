@@ -30,6 +30,64 @@ would silently redefine what "unchanged" means.
 Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a release tag or a commit and
 never `nightly`: it is a moving pointer, and a name that moves is not a pin.
 
+## 1.4.1
+
+A context-cost pass over what the server sends back. Every tool was exercised through the
+real stdio interface and every reply measured byte for byte; the findings said there were
+no stray logs or unasked-for state, but a systematic tax of duplicated encodings and
+pretty-printing. This release removes the tax without removing a single fact an agent was
+relying on, except where a removed field was byte-for-byte the same data in a worse
+encoding.
+
+- **Replies are compact by default.** The JSON-RPC payload inside `content[].text` is no
+  longer indented (`dump(1,'\t')` put one array element per line - a 4K `read_memory`
+  spent a third of its bytes on whitespace). Pass `--pretty` to get the readable form
+  back; stderr diagnostics and protocol framing are unchanged.
+- **`read_memory` takes `format`.** The old reply carried the same bytes twice - a
+  decimal `bytes` array *and* a `hex` string - so a 4096-byte read cost 32.8 KB. The
+  default is now `format:"hex"` alone (~12.4 KB); `format:"bytes"` returns just the
+  array, `format:"both"` returns the old dual form for a caller that wants it.
+- **`ay_state` reports `registers_hex` only.** The decimal `registers` array was the same
+  fourteen registers in a second, no more readable encoding (positions still had to be
+  counted). Every decoded field - channels, noise, envelope, `audible` - is untouched.
+- **`assemble` drops the per-line `bytes` array** (the `hex` string on the same line is
+  the same bytes), the always-empty `"error": ""` on successful lines, and the empty
+  `"labels": {}` object. Failed lines still carry `error`; defined labels still appear.
+- **`settings` accepts `name` on `report`.** A named report returns just that one row
+  (~200 B instead of ~5.9 KB for the full table); no `name` still returns everything.
+- **The geometry warning explains itself once.** The geometry-mismatch warning is a
+  ~350-byte explanation that used to ride every `machine_state`/`frame_timing`/
+  `frame_cost` reply for the rest of the session. The full text now ships the first time
+  the server says a given one; later replies carry a one-line form that still names both
+  frame lengths and the error (`geometry 'ULA.Pentagon' gives 71680 T per frame, a ZX48
+  runs 69888: timings +2.6% out`, ~80 bytes). It is not a bare "said earlier" marker on
+  purpose: a subagent shares its parent's server and never saw the first reply, and a
+  summarized conversation has lost it. The profiler's warnings are left whole - they
+  appear only when a reading is not a measurement, and are short.
+- **List rows carry an address once.** Every row of `trace`, `disassemble`, `assemble`
+  (lines and labels), `beam_log` (watch list, events, summary), `source_at` and the
+  `resolve_symbol`/`load_labels` label lists had `address` and `address_hex` side by side,
+  the decimal twin about a quarter of the row. Rows keep `address_hex`, the form that goes
+  back into an argument; single replies keep both. `disassemble` gives the jump target as
+  `target_hex` (it was decimal only, while the instruction text shows it in hex) and drops
+  `length`, which the `bytes` string already says.
+- **`beam_log` reports `watching` only where it helps** - on `enable` and `dump`, not on
+  `disable`/`clear` answers where the list is already known or being discarded.
+- **`machine_state.memory_map[].bank` now names a 16K bank.** The core's `xa.bank` is a
+  256-byte page number (`bank*64 + subpage`), so the Pentagon's screen bank reported as
+  `320` where every other tool - `read_memory "05:…"`, banked breakpoints, symbol-file
+  banks - calls it `5`. It is now the absolute address over 16K, the same sum those tools
+  use; feeding a reported bank back into a `bank:offset` address now works.
+
+Measured on the live server: `read_memory` of 4 KiB went 32 840 → 12 436 bytes of
+envelope, 256 B went 2 120 → 916; `ay_state` 812 → 698; a `settings` lookup 5 665 → 751;
+and every reply sheds the ~20% indentation tax besides. The smoke suite checks every one
+of these replies for what it must carry and what it must no longer carry. What did *not* change, on
+purpose: `pc`/`pc_hex` and the other `*_hex` pairs (the sigil is how the agent learns to
+write addresses back), the `beam` block in execution replies (cheaper than a separate
+`beam_position` call), `initialize.instructions`, and `tools/list` descriptions - those
+are the agent's manual, not noise.
+
 ## 1.4.0
 
 The emulator core moved from samstyle/Xpeccy to the

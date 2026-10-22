@@ -855,10 +855,10 @@ check "beam position"     'zone'
 check "profiler"          'hot_pages'
 check "trace"             'capacity'
 check "typed into BASIC"  '0 OK, 0:1'
-check "beeper heard"      '"silent\\": false'
+check "beeper heard"      '"silent\\": *false'
 check "ay decoded"        'AY-3-8910'
 check "sound sources"     'dominant_source'
-check "listing loaded"    '"file\\": \\"main\.asm'	# from source_at, not from an assemble echo
+check "listing loaded"    '"file\\": *\\"main\.asm'	# from source_at, not from an assemble echo
 check "coverage"          'unexecuted_gaps'
 check "sound_state"       'mixed_output'
 check "tape state"        'playing'
@@ -866,59 +866,59 @@ check "video recorded"    'frames_recorded'
 check "bank 5 -> \$4000"   '\$4100'
 check "bank 7 -> \$C000"   '\$C001'
 check "bare colon = cpu"  '\$8020'
-check "label as address"  '"pc_hex\\": \\"\$9003'
-check "label range counts" 't_states\\": [1-9][0-9]*[^}]*tag\\": \\"beeploop'
+check "label as address"  '"pc_hex\\": *\\"\$9003'
+check "label range counts" 't_states\\": *[1-9][0-9]*[^}]*tag\\": *\\"beeploop'
 check "unknown label"     'no such label'
 check "unreadable number" 'is not a number'
-check "real frame rate"   '"fps_real\\": 48\.8'
-check "frame cost"        '"interrupts_per_frame\\": 1'
-check "frame headroom"    '"headroom_percent\\": 9[0-9]'
-check "frame idle split"  '"idle_t\\": [1-9][0-9]*'
-check "calls counted"     '"calls\\": 12'
-check "t per call"        '"t_per_call\\": [1-9][0-9]*'
-check "symbols split"     'tag\\": \\"main\\"'
+check "real frame rate"   '"fps_real\\": *48\.8'
+check "frame cost"        '"interrupts_per_frame\\": *1'
+check "frame headroom"    '"headroom_percent\\": *9[0-9]'
+check "frame idle split"  '"idle_t\\": *[1-9][0-9]*'
+check "calls counted"     '"calls\\": *12'
+check "t per call"        '"t_per_call\\": *[1-9][0-9]*'
+check "symbols split"     'tag\\": *\\"main\\"'
 check "unattributed"      '"unattributed\\"'
-check "t-states DD"       't_states\\": 19'
-check "t-states ldir"     't_states\\": 21'
-check "t-states jr cc"    't_states_text\\": \\"12/7\\"'
-check "t-states djnz"     't_states_text\\": \\"13/8\\"'
-check "t-states ex(sp)"   't_states\\": 19'
-check "t-states total"    '"t_states_total\\": [1-9][0-9]*'
+check "t-states DD"       't_states\\": *19'
+check "t-states ldir"     't_states\\": *21'
+check "t-states jr cc"    't_states_text\\": *\\"12/7\\"'
+check "t-states djnz"     't_states_text\\": *\\"13/8\\"'
+check "t-states ex(sp)"   't_states\\": *19'
+check "t-states total"    '"t_states_total\\": *[1-9][0-9]*'
 check "symbols needs range" 'no non-local labels'
 check "unarmed profile"   'the profiler has never been started'
-check "unarmed flag"      '"armed\\": false'
+check "unarmed flag"      '"armed\\": *false'
 check "failed start seen" 'the last profile start FAILED'
 check "failed start named" '"last_start_failed\\"'
 # caller: 4 invocations a frame x 3 frames = 12 calls, 24 nested returns on top
-check "calls skip returns" '"calls\\": 12,[^}]*"entries\\": 36'
-check "leaf calls"        '"calls\\": 24,[^}]*"entries\\": 24'
+check "calls skip returns" '"calls\\": *12,[^}]*"entries\\": *36'
+check "leaf calls"        '"calls\\": *24,[^}]*"entries\\": *24'
 # the caller runs 528 T of its own and spends 552 in the leaf: 1080 inclusive,
 # 90.0 per call against 44.0 self - exact T now, counted from the core's own
 # tick delta rather than divided back out of rounded nanoseconds
-check "inclusive caller"  '"t_states_inclusive\\": 1080'
-check "inclusive per call" '"t_per_call_inclusive\\": 90\.0'
-check "inclusive leaf"    '"t_states\\": 552,[^}]*"t_states_inclusive\\": 552'
-check "run reports T"     '"t_states\\": [1-9][0-9]*'
+check "inclusive caller"  '"t_states_inclusive\\": *1080'
+check "inclusive per call" '"t_per_call_inclusive\\": *90\.0'
+check "inclusive leaf"    '"t_states\\": *552,[^}]*"t_states_inclusive\\": *552'
+check "run reports T"     '"t_states\\": *[1-9][0-9]*'
 check "skip_until"        '"skipped_to\\"'
 check "skip_until fails"  'never reached\|no such label'
 # top at $9400, sub at $9408, done at $9409
-check "asm label back"    '"hex\\": \\"20 FD'
-check "asm label forward" '"hex\\": \\"CD 08 94'
-check "asm label list"    '"sub\\": {[^}]*\$9408'
+check "asm label back"    '"hex\\": *\\"20 FD'
+check "asm label forward" '"hex\\": *\\"CD 08 94'
+check "asm label list"    '"sub\\": *{[^}]*\$9408'
 check "asm reserved name" 'is a register or condition name'
 check "asm double label"  "defined twice"
-check "bank brk armed"    '"bank\\": 7,[^}]*"bank_paged_in\\": false'
-check "bank brk fires"    '"pc_hex\\": \\"\$C000\\"[^}]*"reason\\": \\"breakpoint'
+check "bank brk armed"    '"bank\\": *7,[^}]*"bank_paged_in\\": *false'
+check "bank brk fires"    '"pc_hex\\": *\\"\$C000\\"[^}]*"reason\\": *\\"breakpoint'
 check "brk scope refused" 'scope must be'
 check "geometry warning"  'but a ZX48 runs 69888'
 # "ld hl, $1234" and "ld a, (ix + 5)" - spaces where a source file puts them
-check "asm spaced comma"  '"hex\\": \\"21 34 12'
-check "asm spaced index"  '"hex\\": \\"DD 7E 05'
+check "asm spaced comma"  '"hex\\": *\\"21 34 12'
+check "asm spaced index"  '"hex\\": *\\"DD 7E 05'
 # md5 of 01..08, then the same eight bytes with $9603 poked to FF
-check "memory digest"     '"digest\\": \\"0ee0646c1c77'
-check "memory digest sees a poke" '"digest\\": \\"1bc531b4312b'
+check "memory digest"     '"digest\\": *\\"0ee0646c1c77'
+check "memory digest sees a poke" '"digest\\": *\\"1bc531b4312b'
 check "digest range halved" 'give both from and to'
-check "beta disk present" '"interface\\": \\"Beta Disk'
+check "beta disk present" '"interface\\": *\\"Beta Disk'
 check "bad model refused" 'unknown machine\|not usable here'
 # Against the machine_state that follows the refused GameBoy, not against any
 # Pentagon in the transcript: the first reply of the session is also a Pentagon,
@@ -927,20 +927,20 @@ check_id "server survived"   100 'Pentagon'
 
 # Settings. The report is the only way to ask what the machine is set to, and
 # every value has to say where it came from.
-check "settings report"    '"count\\": 19'
-check "settings source"    '"source\\": \\"core default'
-check "settings scope"     '"scope\\": \\"needs reset'
-check "settings set"       '"source\\": \\"this session'
+check "settings report"    '"count\\": *19'
+check "settings source"    '"source\\": *\\"core default'
+check "settings scope"     '"scope\\": *\\"needs reset'
+check "settings set"       '"source\\": *\\"this session'
 check "settings warns on timing" 'no longer comparable'
 # Refused, never clamped: a silently corrected setting does not do what it says.
 check "settings range"     'video.gamma: 9 is outside'
 check "settings enum"      "not one of: none, a, b"
 check "settings unknown"   'no such setting: nope.nothing'
 check "settings action"    'action must be report, set or reset'
-check "settings reset"     '"value\\": \\"a\\"'
+check "settings reset"     '"value\\": *\\"a\\"'
 # Blending: telling flicker from animation is the difference between undoing a
 # flicker and quietly returning motion blur.
-check "blend pattern"      '"pattern\\": \\"'
+check "blend pattern"      '"pattern\\": *\\"'
 
 
 # The orientation text sent with initialize. A tool description says what one
@@ -951,35 +951,35 @@ check "instructs on digests" 'depends on screen memory AND on when the bank is s
 
 # Raster debugging. 40000 instructions of a 64-instruction loop is 625 passes,
 # and that number depends on the loop alone, not on anything run before it.
-check "beam log records" '"events_total\\": 625'
-check "beam log address" '"address_hex\\": \\"\$8005'
+check "beam log records" '"events_total\\": *625'
+check "beam log address" '"address_hex\\": *\\"\$8005'
 check "beam log jitter"  '"jitter_t\\":'
 check "beam log needs addresses" 'enable needs addresses\[\]'
 # The beam only moves between instructions, so landing past the target is
 # normal - landing on a different line is not.
-check "run_to_beam lands"  '"line\\": 100,[^}]*"t_states_frame'
-check "run_to_beam exact"  '"overshoot_lines\\": 0'
+check "run_to_beam lands"  '"line\\": *100,[^}]*"t_states_frame'
+check "run_to_beam exact"  '"overshoot_lines\\": *0'
 check "run_to_beam range"  'bad line: 99999 is outside 0\.\.319'
-check "stop reports beam"  '"beam\\": {'
+check "stop reports beam"  '"beam\\": *{'
 # Pentagon draws 320x240 with the border on (Xpeccy-plus' medium border mode is
 # 32x24 dots; upstream's continuous half-border measured 320x248); the digest is
 # of the drawn frame, so an unchanging picture repeats and says which it matched.
-check "frame_digest size"  '"width\\": 320,\|"height\\": 240,'
-check "frame_digest repeats" '"same_as_frame\\": 0'
+check "frame_digest size"  '"width\\": *320,\|"height\\": *240,'
+check "frame_digest repeats" '"same_as_frame\\": *0'
 check "frame_digest lines" '"changed_lines\\":'
 
 # Blending, which is what makes a picture that flickers on purpose readable.
-check "beam knows the page" '"screen_page\\": 7'
+check "beam knows the page" '"screen_page\\": *7'
 check "beam blank coords"   '"blank_x\\":'
 check "beam locates INT"    '"interrupt_at\\":'
-check "attrs follow the ULA" '"page_on_air\\": 7'
-check "attrs read page 7"   '"attributes\\": \\"28 28 28'
-check "attrs page 5 asked"  '"attributes\\": \\"38 38 38'
+check "attrs follow the ULA" '"page_on_air\\": *7'
+check "attrs read page 7"   '"attributes\\": *\\"28 28 28'
+check "attrs page 5 asked"  '"attributes\\": *\\"38 38 38'
 check "page range refused"  'is outside 0..255'
 check "video_config"      '"frame_history\\":'
 check "blend refused"     'bad blend: 99'
-check "blend saw two frames" '"distinct_frames\\": 2'
-check "blend mixes in linear light" '"digest\\": \\"45760c0fa5f8'
+check "blend saw two frames" '"distinct_frames\\": *2'
+check "blend mixes in linear light" '"digest\\": *\\"45760c0fa5f8'
 
 # Bad arguments: refused by name, and the server still answers afterwards.
 check "addr above space"  'bad from: 100000 is outside the address space'
@@ -992,7 +992,7 @@ check "absurd ram size"   'memory size must be at most 4096K'
 check "hex typo refused"  "bad hex: 'GG' is not a hex byte"
 check "pattern typo"      "bad pattern: 'ZZ' is not a hex byte"
 check "tape block range"  'bad block: 5 is outside 0\.\.0'
-check "tape block ok"     '"blocks\\": 1'
+check "tape block ok"     '"blocks\\": *1'
 check "alive after bad args" '"id":142'
 
 # Answering every request is not the same as ending well. A tape has been loaded
@@ -1024,7 +1024,7 @@ fi
 # mapfile arrived in bash 4; macOS still ships 3.2, where it is a syntax error
 # that takes DIG and every check below it with it.
 DIG=()
-while IFS= read -r _line; do DIG+=("$_line"); done < <(grep -o 'digest\\": \\"[0-9a-f]\{12\}' "$OUT" | sed 's/.*\\"//')
+while IFS= read -r _line; do DIG+=("$_line"); done < <(grep -o 'digest\\": *\\"[0-9a-f]\{12\}' "$OUT" | sed 's/.*\\"//')
 if [ "${#DIG[@]}" -ge 6 ]; then
 	if [ "${DIG[0]}" != "${DIG[1]}" ] && [ "${DIG[1]}" != "${DIG[2]}" ]; then
 		echo "  ok   digest follows the screen (${DIG[0]} ${DIG[1]} ${DIG[2]})"
@@ -1103,44 +1103,44 @@ fi
 # Both of these are things a reviewer finds by typing one wrong value, so they
 # are checked against the reply to that exact request rather than against the
 # transcript as a whole.
-check_id "sdcard empty"              210 '"mounted\\": false'
-check_id "sdcard mounted"            211 '"mounted\\": true'
-check_id "sdcard capacity"           211 '"capacity_mb\\": 4'
-check_id "sdcard locked"             212 '"locked\\": true'
+check_id "sdcard empty"              210 '"mounted\\": *false'
+check_id "sdcard mounted"            211 '"mounted\\": *true'
+check_id "sdcard capacity"           211 '"capacity_mb\\": *4'
+check_id "sdcard locked"             212 '"locked\\": *true'
 check_id "sdcard mount missing"      213 'no such image file'
 check_id "sdcard bad action"         214 'unknown sdcard action'
-check_id "tsconf model"              215 '"model\\": \\"TSConf'
-check_id "tsconf 4M ram"             215 '"memory_kb\\": 4096'
+check_id "tsconf model"              215 '"model\\": *\\"TSConf'
+check_id "tsconf 4M ram"             215 '"memory_kb\\": *4096'
 check_id "tsconf geometry"           215 'ULA\.TSConf'
 check_id "tsconf roms"               215 'machine:evo-tsconf'
-check_id "sdcard on tsconf"          216 '"mounted\\": true'
-check_id "sdcard remount unlocks"    216 '"locked\\": false'
-check_id "spg loads"                 217 'pc_hex\\": \\"\$8000'
-check_id "spg names its machine"     217 '"machine\\": \\"evo-tsconf'
+check_id "sdcard on tsconf"          216 '"mounted\\": *true'
+check_id "sdcard remount unlocks"    216 '"locked\\": *false'
+check_id "spg loads"                 217 'pc_hex\\": *\\"\$8000'
+check_id "spg names its machine"     217 '"machine\\": *\\"evo-tsconf'
 check_id "spg wrote page 5"          218 '41 41 41 41'
 check_id "bank out of range"         219 'no RAM bank 256'
 check_id "bank tail reads"           220 '41 41 41 41'
-check_id "sdcard ejected"            221 '"mounted\\": false'
-check_id "sdcard fields cleared"     221 '"capacity_mb\\": 0'
+check_id "sdcard ejected"            221 '"mounted\\": *false'
+check_id "sdcard fields cleared"     221 '"capacity_mb\\": *0'
 check_id "truncated spg refused"     223 'truncated \.spg'
 check_id "bad block count refused"   224 'block count 513'
 check_id "huge sdcard refused"       225 'image too large'
 check_id "address required"          226 'address is required'
 check_id "oversized bank refused"    227 'no RAM bank'
-check_id "zxplus2 own definition"    228 '"machine\\": \\"zxplus2'
+check_id "zxplus2 own definition"    228 '"machine\\": *\\"zxplus2'
 check_id "back on pentagon"          222 'Pentagon'
-check_id "snapshot written"          229 '"ok\\": true'
-check_id "switched to zx48"          230 '"machine\\": \\"zx48'
-check_id "sna picked its machine"    242 '"machine\\": \\"zx128'
-check_id "state reports it too"      243 '"machine\\": \\"zx128'
-check_id "tslab alias resolves"      244 '"machine\\": \\"evo-tsconf'
-check_id "bin stayed on pentagon"    247 '"machine\\": \\"pent'
+check_id "snapshot written"          229 '"ok\\": *true'
+check_id "switched to zx48"          230 '"machine\\": *\\"zx48'
+check_id "sna picked its machine"    242 '"machine\\": *\\"zx128'
+check_id "state reports it too"      243 '"machine\\": *\\"zx128'
+check_id "tslab alias resolves"      244 '"machine\\": *\\"evo-tsconf'
+check_id "bin stayed on pentagon"    247 '"machine\\": *\\"pent'
 check_id "bin writes even bytes"     248 'AA FF CC FF EE FF 00 FF'
 check_id "truncated td0 refused"     249 'truncated \.td0'
 check_id "255-sector dsk refused"    250 'overrun the track-info'
-check_id "good dsk loads"            251 '"ok\\": true'
-check_id "dsk lands on plus3"        251 '"machine\\": \\"zxplus3'
-check_id "good td0 loads"            253 '"ok\\": true'
+check_id "good dsk loads"            251 '"ok\\": *true'
+check_id "dsk lands on plus3"        251 '"machine\\": *\\"zxplus3'
+check_id "good td0 loads"            253 '"ok\\": *true'
 check_id "0-sector fdi refused"      260 'declares 0 sectors'
 check_id "0-length tzx refused"      261 '0-length data field'
 check_id "bad 0x19 tzx refused"      262 'pilot table'
@@ -1151,30 +1151,30 @@ check_id "dangling tap refused"      266 'truncated \.tap'
 check_id "unknown udi refused"       267 'unknown format'
 check_id "1-byte trd refused"        268 'bad \.trd'
 check_id "short ima refused"         269 'truncated \.ima'
-check_id "good trd loads"            270 '"ok\\": true'
-check_id "trd lands on pentagon"     270 '"machine\\": \\"pent'
-check_id "trd inserted"              271 '"inserted\\": true'
-check_id "48k z80 pages load"        272 '"ok\\": true'
-check_id "hlen-22 z80 tolerated"     273 '"ok\\": true'
+check_id "good trd loads"            270 '"ok\\": *true'
+check_id "trd lands on pentagon"     270 '"machine\\": *\\"pent'
+check_id "trd inserted"              271 '"inserted\\": *true'
+check_id "48k z80 pages load"        272 '"ok\\": *true'
+check_id "hlen-22 z80 tolerated"     273 '"ok\\": *true'
 check_id "dup-then-real z80 refused" 279 'duplicate pages'
 check_id "drive 4 refused"           283 'drive must be 0..3'
 check_id "drive -1 refused"          284 'drive must be 0..3'
 check_id "oversized dsk refused"     280 'bytes of room'
 check_id "oversized td0 refused"     281 'bytes of room'
-check_id "short ext dsk loads"       282 '"ok\\": true'
+check_id "short ext dsk loads"       282 '"ok\\": *true'
 check_id "bank-2 sna refused"        274 'cannot hold this 128K image'
 check_id "0-len tzx 0x14 refused"    275 '0-length data field'
-check_id "partial trd loads"         276 '"ok\\": true'
+check_id "partial trd loads"         276 '"ok\\": *true'
 check_id "saved trd written"         277 '"path\\":'
 check_id "unformattable fdi refused" 278 'bytes of room'
-check_id "td0 lands on pentagon"     253 '"machine\\": \\"pent'
+check_id "td0 lands on pentagon"     253 '"machine\\": *\\"pent'
 check_id "size-23 td0 refused"       258 'size code 23'
 check_id "size-23 dsk refused"       259 'size code 23'
-check_id "compressed spg loads"      254 '"ok\\": true'
-check_id "spg lands on tsconf"       254 '"machine\\": \\"evo-tsconf'
-check_id "mlz literals landed"       257 '"hex\\": \\"41 42 42 42'
+check_id "compressed spg loads"      254 '"ok\\": *true'
+check_id "spg lands on tsconf"       254 '"machine\\": *\\"evo-tsconf'
+check_id "mlz literals landed"       257 '"hex\\": *\\"41 42 42 42'
 check_id "malformed spg refused"     255 'cannot be unpacked'
-check_id "refusal left machine"      256 '"machine\\": \\"evo-tsconf'
+check_id "refusal left machine"      256 '"machine\\": *\\"evo-tsconf'
 
 check_id "negative skip budget refused"   200 "outside 1\.\."
 check_id "negative frame budget refused"  201 "outside 1\.\."
@@ -1237,10 +1237,10 @@ check2() {	# check2 <label> <request id> <pattern> - check_id against $OUT2
 	fi
 }
 check2 "unloadable dsk refused"      12 'needs a machine'
-check2 "failed load kept the byte"   13 'hex\\": \\"AA'
-check2 "failed load kept pentagon"   14 '"machine\\": \\"pent'
+check2 "failed load kept the byte"   13 'hex\\": *\\"AA'
+check2 "failed load kept pentagon"   14 '"machine\\": *\\"pent'
 check2 "bad trd refused pre-switch"  15 'bad \.trd'
-check2 "bad trd kept the byte"       16 'hex\\": \\"AA'
+check2 "bad trd kept the byte"       16 'hex\\": *\\"AA'
 
 # Media whose cost is out of proportion to the file. A .tzx is a program the
 # reader runs, a TapeSignal per pulse in buffers it never checks: four bytes
@@ -1362,22 +1362,22 @@ checkm() {	# checkm <label> <request id> <pattern> - check_id against $OUTM
 	fi
 }
 checkm "fdi too big for DD refused"     13 'bytes of room, the drive packs 6250'
-checkm "refused disk kept the memory"   14 'hex\\": \\"01 02 03 04 05 06 07 08'
-checkm "refused disk kept the PC"       15 'pc\\": 4660'
-checkm "refused disk kept the zx48"     16 '"machine\\": \\"zx48'
+checkm "refused disk kept the memory"   14 'hex\\": *\\"01 02 03 04 05 06 07 08'
+checkm "refused disk kept the PC"       15 'pc\\": *4660'
+checkm "refused disk kept the zx48"     16 '"machine\\": *\\"zx48'
 checkm "looped #12 tzx refused"         17 'plays out to more than'
 checkm "one-symbol #19 tzx refused"     18 'plays out to more than'
 checkm "deflate-bomb #18 tzx refused"   19 'inflates past'
-checkm "looping real-size tzx loads"    20 '"ok\\": true'
-checkm "looping tzx has its blocks"     21 'blocks\\": 2'
-checkm "ima makes the drive HD"         31 'track_bytes\\": 17700'
-checkm "eject takes the drive to DD"    32 'track_bytes\\": 6250'
-checkm "trd after ima eject is DD"      33 'track_bytes\\": 6250'
-checkm "trd over an ima is DD"          35 'track_bytes\\": 6250'
+checkm "looping real-size tzx loads"    20 '"ok\\": *true'
+checkm "looping tzx has its blocks"     21 'blocks\\": *2'
+checkm "ima makes the drive HD"         31 'track_bytes\\": *17700'
+checkm "eject takes the drive to DD"    32 'track_bytes\\": *6250'
+checkm "trd after ima eject is DD"      33 'track_bytes\\": *6250'
+checkm "trd over an ima is DD"          35 'track_bytes\\": *6250'
 checkm "fdi after ima eject refused"    38 'bytes of room'
 checkm "signed dsk length refused"      40 'no real track size'
-checkm "short-sector ext dsk loads"     41 '"ok\\": true'
-checkm "1 GiB sd image mounts"          50 'capacity_mb\\": 1024'
+checkm "short-sector ext dsk loads"     41 '"ok\\": *true'
+checkm "1 GiB sd image mounts"          50 'capacity_mb\\": *1024'
 # track 1 sector 1: the file's 100 bytes, then zeros - not track 0's AA
 if python3 - "$MED_SAVED" <<'PY'
 import sys
@@ -1433,12 +1433,12 @@ check3() {	# check3 <label> <request id> <pattern> - check_id against $OUT3
 		fail=1
 	fi
 }
-check3 "mixed-mode frame read wide"    14 'width\\": 640'
-check3 "next mixed-mode frame too"     15 'width\\": 640'
-check3 "profi paper is 512x240"        16 'height\\": 240.*width\\": 512'
-check3 "recording kept every frame"    17 'frames_recorded\\": 20'
+check3 "mixed-mode frame read wide"    14 'width\\": *640'
+check3 "next mixed-mode frame too"     15 'width\\": *640'
+check3 "profi paper is 512x240"        16 'height\\": *240.*width\\": *512'
+check3 "recording kept every frame"    17 'frames_recorded\\": *20'
 check3 "bad romset refused"            18 'unknown romset'
-check3 "bad romset left the model"     19 '"machine\\": \\"profi'
+check3 "bad romset left the model"     19 '"machine\\": *\\"profi'
 # one colour compresses to well under a kilobyte; the skewed menu does not
 if [ -f "$TMPD/regeom.png" ] && [ "$(filesize "$TMPD/regeom.png")" -lt 1200 ]; then
 	echo "  ok   geometry change cleared the frame"
@@ -1499,18 +1499,113 @@ checkb() {	# checkb <label> <request id> <pattern> - check_id against $OUTBRK
 	fi
 }
 checkb "bank 7 cell armed"              11 'bank_paged_in'
-checkb "cleared cell stays cleared"     21 'reason\\": \\"budget'
-checkb "FF:8003 is a plain address"     30 'phys_address\\": 32771'
+checkb "cleared cell stays cleared"     21 'reason\\": *\\"budget'
+checkb "FF:8003 is a plain address"     30 'phys_address\\": *32771'
 checkb "bank 15 refused on 128K"        31 'no RAM bank 15'
 checkb "bank 8 refused on 128K"         32 'no RAM bank 8'
 checkb "offset past a bank refused"     33 '\$0000\.\.\$3FFF'
-checkb "FF:8000 reads the CPU address"  41 'address\\": 32768.*hex\\": \\"AB CD'
+checkb "FF:8000 reads the CPU address"  41 'address\\": *32768.*hex\\": *\\"AB CD'
 checkb "read past a bank refused"       42 'runs past the end of bank 5'
 checkb "negative offset refused"        43 'offset must be hex'
 checkb "offset 4000 refused"            44 '\$0000\.\.\$3FFF'
-checkb "read to the bank end works"     45 'offset\\": 16382'
-checkb "port FE matches the low byte"   50 'match\\": \\"low byte'
-checkb "out (\$FE),a with A=7 caught"   53 'reason\\": \\"breakpoint'
+checkb "read to the bank end works"     45 'offset\\": *16382'
+checkb "port FE matches the low byte"   50 'match\\": *\\"low byte'
+checkb "out (\$FE),a with A=7 caught"   53 'reason\\": *\\"breakpoint'
+
+# What a reply carries: each fact once, in the encoding asked for, and nothing a
+# reader cannot use. A dropped field is checked absent, a kept one present, so
+# a reply growing its duplicates back fails here rather than in someone's
+# context window.
+OUTR="$TMPD/replies.out"
+{
+	echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+	echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+	echo '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"Pentagon","boot_frames":0}}}'
+	echo '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"write_memory","arguments":{"address":"$4000","hex":"01 02 03 04"}}}'
+	echo '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"$4000","length":4}}}'
+	echo '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"$4000","length":4,"format":"bytes"}}}'
+	echo '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"$4000","length":4,"format":"both"}}}'
+	echo '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"$4000","format":"HEX"}}}'
+	# the bank machine_state names is the bank bank:offset reads
+	echo '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"machine_state","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"05:0000","length":4}}}'
+	# the Pentagon has an AY; the ZX48 below does not
+	echo '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"ay_state","arguments":{}}}'
+	# the geometry warning: in full once, then short but still with its numbers
+	echo '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"machine_config","arguments":{"model":"ZX48","geometry":"ULA.Pentagon","boot_frames":0}}}'
+	echo '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"frame_timing","arguments":{}}}'
+	echo '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"machine_state","arguments":{}}}'
+	# the profiler's warnings guard a measurement that is not one: never shortened
+	echo '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"profile","arguments":{"action":"read"}}}'
+	echo '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"profile","arguments":{"action":"read"}}}'
+	echo '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"settings","arguments":{"name":"timing.contPattern"}}}'
+	echo '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"settings","arguments":{"name":"timing.noSuchThing"}}}'
+	echo '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","text":"lbl: ld a,1\nfoo bar"}}}'
+	echo '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"assemble","arguments":{"address":"$8000","text":"nop"}}}'
+	echo '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"enable","addresses":["$11DF"]}}}'
+	echo '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"clear"}}}'
+	# list rows: the address as \$hex alone. The 48K ROM opens di / xor a /
+	# ld de,#FFFF / jp #11CB, so $0005 is a jump with a known target
+	echo '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"disassemble","arguments":{"address":"$0005","count":1}}}'
+	echo '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"trace","arguments":{"action":"enable"}}}'
+	echo '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"run_frames","arguments":{"count":60}}}'
+	echo '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"trace","arguments":{"action":"dump","count":2}}}'
+	echo '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"beam_log","arguments":{"action":"dump","count":2}}}'
+	echo "{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"tools/call\",\"params\":{\"name\":\"load_labels\",\"arguments\":{\"path\":\"$LABELS_N\"}}}"
+	echo '{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"resolve_symbol","arguments":{}}}'
+	echo "{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"tools/call\",\"params\":{\"name\":\"load_listing\",\"arguments\":{\"path\":\"$LST_N\"}}}"
+	echo '{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"source_at","arguments":{"address":"$8003"}}}'
+} | "$BIN" --config "$(native "$CFG")" > "$OUTR" 2>/dev/null
+# the same read through --pretty, the form a person watching the wire asks for
+OUTP="$TMPD/pretty.out"
+{
+	echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+	echo '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_memory","arguments":{"address":"$4000","length":4}}}'
+} | "$BIN" --config "$(native "$CFG")" --pretty > "$OUTP" 2>/dev/null
+checkr() {	# checkr <file> <label> <request id> <pattern> [absent-pattern]
+	local line
+	line=$(grep "\"id\":$3," "$1" | head -1)
+	if [ -n "$line" ] && printf '%s' "$line" | grep -q -e "$4" &&
+	   { [ -z "${5:-}" ] || ! printf '%s' "$line" | grep -q -e "$5"; }; then
+		echo "  ok   $2"
+	else
+		echo "  FAIL $2"
+		[ -n "$line" ] && printf '       %s\n' "$(printf '%s' "$line" | cut -c1-160)"
+		fail=1
+	fi
+}
+checkr "$OUTR" "read_memory is hex alone"          12 'hex\\":\\"01 02 03 04' '\\"bytes\\"'
+checkr "$OUTR" "format bytes is the array alone"   13 'bytes\\":\[1,2,3,4\]' '\\"hex\\"'
+checkr "$OUTR" "format both carries both"          14 'bytes\\":\[1,2,3,4\],\\"hex\\":\\"01 02 03 04'
+checkr "$OUTR" "unknown format refused"            15 'format must be hex, bytes or both'
+checkr "$OUTR" "memory_map names 16K banks"        16 'bank\\":5,\\"cpu_address\\":\\"\$4000.*bank\\":2,\\"cpu_address\\":\\"\$8000'
+checkr "$OUTR" "that bank reads the same bytes"    17 'bank\\":5,.*hex\\":\\"01 02 03 04'
+checkr "$OUTR" "geometry warning in full first"    20 'The raster comes from the geometry'
+checkr "$OUTR" "repeat is short, numbers kept"     21 '71680 T per frame, a ZX48 runs 69888: timings +2.6% out' 'The raster comes'
+checkr "$OUTR" "every repeat keeps them"           22 'a ZX48 runs 69888: timings +2.6% out'
+checkr "$OUTR" "profile warning in full"           23 'never been started'
+checkr "$OUTR" "and in full again"                 24 'never been started'
+checkr "$OUTR" "settings by name is one row"       25 'count\\":1,'
+checkr "$OUTR" "unknown setting refused"           26 'no such setting'
+checkr "$OUTR" "assemble: error on the failed line" 27 'error\\":\\"' '\\"bytes\\"'
+checkr "$OUTR" "assemble: none on the good one"    27 'hex\\":\\"3E 01\\",\\"ok\\":true'
+checkr "$OUTR" "assemble: defined labels listed"   27 'labels\\":{\\"lbl'
+checkr "$OUTR" "assemble: no empty labels"         28 'hex\\":\\"00' 'labels'
+checkr "$OUTR" "ay_state: registers once, as hex"  29 'registers_hex' '\\"registers\\"'
+checkr "$OUTR" "beam_log enable lists the watch"   30 'watching'
+checkr "$OUTR" "beam_log clear does not"           31 'events_total' 'watching'
+checkr "$OUTR" "replies are compact"               12 'address\\":16384' '\\n\\t'
+checkr "$OUTR" "assemble rows: address once"       27 'address_hex\\":\\"\$8000' '\\"address\\":'
+checkr "$OUTR" "assemble labels: address once"     27 'labels\\":{\\"lbl\\":{\\"address_hex\\":\\"\$8000\\"}}'
+checkr "$OUTR" "disassemble target as hex"         32 'target_hex\\":\\"\$11CB' '\\"target\\":'
+checkr "$OUTR" "disassemble rows: address once"    32 'address_hex\\":\\"\$0005' '\\"address\\":'
+checkr "$OUTR" "disassemble: no length"            32 'bytes\\":\\"C3 CB 11' '\\"length\\"'
+checkr "$OUTR" "trace rows: address once"          35 'trace\\":\[{\\"address_hex' '\\"address\\":'
+checkr "$OUTR" "beam_log events: address once"     36 'events\\":\[{\\"address_hex' '\\"address\\":'
+checkr "$OUTR" "load_labels sample: address once"  37 'sample\\":\[{\\"address_hex' '\\"address\\":'
+checkr "$OUTR" "label table: address once"         38 'labels\\":\[{\\"address_hex' '\\"address\\":[0-9]'
+checkr "$OUTR" "source_at rows: address once"      40 'source\\":\[{\\"address_hex' '\\"source\\":\[{\\"address\\":'
+checkr "$OUTP" "--pretty indents them"             12 '{\\n\\t\\"address'
 
 echo
 cli "--version reports both versions" 0 "Xpeccy" --version
