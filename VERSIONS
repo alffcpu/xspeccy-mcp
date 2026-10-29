@@ -9,7 +9,7 @@
 
 # The server's own version, reported over MCP as serverInfo.version and by
 # --version. See CHANGELOG.md.
-XSPECCY_MCP_VERSION = 1.4.1
+XSPECCY_MCP_VERSION = 1.5.0
 
 # The emulator core the server is built and tested against. Since 1.4.0 that is
 # xpeccy-plus (https://github.com/dotkoval/xpeccy-plus), not samstyle's upstream:

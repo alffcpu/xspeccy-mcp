@@ -26,7 +26,7 @@ An MCP server that lets AI agents run and inspect ZX Spectrum programs through t
 SAM style that carries contended memory and I/O contention, machine definitions as data
 (`res/machines/*.conf`), and the TSConf and SD-card hardware.
 
-54 tools over one machine, driven from an agent: load a snapshot, tape or disk image
+61 tools over one machine, driven from an agent: load a snapshot, tape or disk image
 (`.spg` snapshots and `.wav` tapes included), run and step, set breakpoints by address or
 by bank, read and write memory - a `bank:offset` read reaches a RAM bank that is not paged
 in - mount and lock an SD-card image, assemble and disassemble, resolve labels and listing
@@ -53,6 +53,14 @@ than whichever bank happens to be mapped at `$4000`.
 
 `settings` reports every emulator setting the server can change, where the current value came
 from and what changing it costs, and changes one for the session or for good.
+
+The Beta Disk's WD1793 controller has a debugger of its own. `fdc_state` reads the chip at
+any moment - registers, the command and its phase, which sector is under the head - and
+`fdc_log` keeps a journal of every command with its sectors: when the ID came, how many
+bytes the CPU missed and which was first, which interrupt was running. Runs stop on a
+command, an error or a lost byte (`fdc_break`); `fdc_sweep` runs a load at every angle of
+the disk; `disk_track` puts faults onto sectors; and `checkpoint` keeps a load in progress,
+which a `.sna` cannot.
 
 **Point your agent at [COOKBOOK.md](COOKBOOK.md) before it starts.** The tool descriptions say
 what each call does; the cookbook says which calls to make for a given question, in what order,

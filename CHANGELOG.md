@@ -30,6 +30,51 @@ would silently redefine what "unchanged" means.
 Last, bump `XSPECCY_MCP_VERSION` and add a section below. Use a release tag or a commit and
 never `nightly`: it is a moving pointer, and a name that moves is not a pin.
 
+## 1.5.0
+
+A debugger for the Beta Disk's WD1793, for work on code that drives it directly - a track
+loader, a fast reader, anything that calls the TR-DOS ROM from RAM. Until now that could only
+be watched through port breakpoints. Nothing in the core changes: the server watches the
+controller around every instruction and keeps what it sees.
+
+- **`fdc_state`**: the controller now, without side effects - registers, status decoded for
+  the command class, INTRQ/DRQ, the command and its phase, the drive (head cylinder against
+  the track register), and the disk under the head: position, angle, which field of which
+  sector, and in how many T-states each ID comes round. `trdos: true` decodes TR-DOS's system
+  variables.
+- **`fdc_log`**: a journal of every command with its sectors - when the ID came, the first
+  data byte, bytes the CPU took and lost and the first lost one, interrupts during the
+  transfer and their longest handler, CRC - and of `#FF` writes and commands the controller
+  ignored. `summary` adds it up: sectors read and broken, time finding IDs, transferring and
+  seeking, revolutions, throughput against the track's ceiling, interrupts against the time a
+  byte waits.
+- **`fdc_break`**: stop a run on a command (any, or one class), its end, an error, a lost
+  byte, a CRC error, not found, an index pulse, an interrupt during a transfer, or an ID
+  passing the head. Runs report `reason: "fdc"` and `fdc_event`; `clear_breakpoints` clears
+  these too.
+- **`fdc_sweep`**: the same load at N disk angles from the current state, with time, sectors
+  and an optional check of memory against the disk per angle, and the machine put back. An
+  emulator starts the disk at the same angle every time; real hardware does not.
+- **`disk_track`**: the physical layout of a track - sector order, offsets, marks, both CRCs,
+  where the head is, T per byte and per revolution - and faults on sectors (`crc_data`,
+  `crc_id`, `no_id`, `no_data`, `deleted`) that `clear_faults` takes off byte for byte.
+- **`disk_sector`**: read and write sectors of the image directly, and `verify` memory against
+  the disk in TR-DOS order from a sector or a catalogue file.
+- **`checkpoint`**: the whole machine kept in the server's memory, a controller mid-command and
+  the angle of the disk included, so a load can be resumed from its middle. Not a file: the
+  state holds pointers into the core that the next run has elsewhere. Refused on another
+  machine.
+- **`disk` gets `setup`**: turn the disk, make the drive faster or slower, give the motor a
+  spin-up time, write-protect it. `state` reports them.
+- **`save_snapshot` warns** when the controller is mid-command: a `.sna` cannot hold it.
+- **The TR-DOS ROM by name.** `trdos.read_bytes`, `trdos.out_c`, `trdos.ret` and the rest work
+  in every address argument and appear in `disassemble` while that ROM is paged in, each
+  checked against the ROM's bytes before it is given.
+
+Cost: 61 tools instead of 54 put 6.1 KB more into `tools/list` (38 003 to 44 105 bytes).
+Running with no disk activity is as fast as before within the noise; while the disk is read
+without a break the monitor costs about 3.5%.
+
 ## 1.4.1
 
 A context-cost pass over what the server sends back. Every tool was exercised through the

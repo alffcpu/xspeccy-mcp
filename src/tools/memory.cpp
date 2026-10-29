@@ -225,12 +225,16 @@ void registerMemoryTools() {
 			     };
 			     if (const std::string* lab = mach().labels().atAddress(adr))
 				     line["label"] = *lab;
+			     else if (const char* rom = fdc::trdosNameAt(mach().comp(), adr))
+				     line["label"] = rom;	// only while the TR-DOS ROM is paged in
 			     if (const auto* src = mach().listing().atAddress(adr))
 				     line["source"] = src->text;
 			     if (mn.oadr >= 0) {
 				     line["target_hex"] = hex16(mn.oadr);
 				     if (const std::string* lab = mach().labels().atAddress(mn.oadr))
 					     line["target_label"] = *lab;
+				     else if (const char* rom = fdc::trdosNameAt(mach().comp(), mn.oadr))
+					     line["target_label"] = rom;
 			     }
 			     if (mn.cond) line["conditional"] = true;
 			     if (wantT) {

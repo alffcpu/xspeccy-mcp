@@ -52,6 +52,7 @@ set(XSP_CORE_SOURCES
 	src/xsp_audio.cpp
 	src/xsp_keyboard.cpp
 	src/xsp_machine.cpp
+	src/xsp_fdc.cpp
 	src/xsp_blend.cpp
 	src/xsp_settings.cpp
 	src/xsp_video.cpp
@@ -73,6 +74,7 @@ set(XSP_TOOL_SOURCES
 	src/tools/audio.cpp
 	src/tools/input.cpp
 	src/tools/media.cpp
+	src/tools/disk.cpp
 )
 
 # The parts, built once and linked into both the server and the test binary.
@@ -158,6 +160,7 @@ if(XSP_UNIT_TESTS)
 		tests/unit/test_blend.cpp
 		tests/unit/test_builtin.cpp
 		tests/unit/test_config.cpp
+		tests/unit/test_fdc.cpp
 		tests/unit/test_gif.cpp
 		tests/unit/test_keyboard.cpp
 		tests/unit/test_labels.cpp

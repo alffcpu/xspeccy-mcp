@@ -16,6 +16,7 @@ extern "C" {
 #include "sound/ayym.h"			// aymChip for machine-definition psg.* keys
 #include "sound/soundrive.h"		// SDRV_* is stored straight into sdrv->type
 #include "cpu/Z80/z80.h"		// Z80_INT/Z80_NMI: which interrupt a step takes
+#include "xstate.h"			// checkpoints
 // The table of machines the core knows. Upstream stopped declaring it in the header and
 // left the definition where it was, so the GUI declares it for itself in setupwin.cpp and
 // this is the same line. Entries with a NULL core are menu separators.
@@ -709,6 +710,7 @@ bool Machine::setModel(const std::string& name, std::string& err) {
 	// garbage frame before the first real frame lands
 	vid_clear_image();
 	video::historyClear();
+	m_fdc.discontinuity(m_comp, "reset");
 	// applyMachineDef ran compSetBaseFrq -> zx_init -> fdc_set_hd(0); the
 	// floppy contents and mounts survive a model switch, their density does
 	// not - put it back
@@ -936,15 +938,23 @@ void Machine::reapplyDriveGeom() {
 	}
 }
 
-long long Machine::execOne() {
+long long Machine::execOne(bool intDue) {
+	if (m_fdc.idle(m_comp)) {
+		const long long ns = compExec(m_comp);
+		reapplyDriveGeom();
+		return ns;
+	}
+	m_fdc.before(m_comp, intDue);
 	const long long ns = compExec(m_comp);
 	reapplyDriveGeom();
+	m_fdc.after(m_comp, intDue);
 	return ns;
 }
 
 void Machine::reset(int mode) {
 	compReset(m_comp, mode);
 	reapplyDriveGeom();
+	m_fdc.discontinuity(m_comp, "reset");
 	// the frames before a reset belong to another program; blending across it
 	// would average two unrelated pictures
 	video::historyClear();
@@ -961,6 +971,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 	RunResult r;
 	Computer* c = m_comp;
 	c->flgBRK = 0;
+	m_fdc.takeStop();		// an event a step or a measurement saw is not this run's
 	const int savedDebug = c->flgDBG;
 	bool first = true;
 
@@ -994,7 +1005,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 		// per-instruction delta stays right through the wrap as an unsigned
 		// difference (one instruction never comes near 2^31 T).
 		const int t0 = c->tickCount;
-		const long long ns = execOne();
+		const long long ns = execOne(intDue);
 		const int t = (int)((unsigned)c->tickCount - (unsigned)t0);
 		c->flgDBG = savedDebug;
 		first = false;
@@ -1020,6 +1031,7 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 			c->flgFRM = 0;
 			r.frames++;
 			if (m_profile.on) m_profile.frames++;
+			m_fdc.sync(c);			// its T counter is folded in lazily
 			video::historyPush(c);		// for blended captures
 			// the frame wrapped, so a target that was behind us is ahead again
 			if (beamLine >= 0) beamArmed = true;
@@ -1029,6 +1041,11 @@ RunResult Machine::execLoop(long long maxInstructions, int stopPc, int maxFrames
 			r.brk_type = c->brkt;
 			r.brk_addr = c->brka;
 			c->flgBRK = 0;
+			break;
+		}
+		if (m_fdc.stopPending()) {
+			r.reason = "fdc";
+			r.fdc = m_fdc.takeStop();
 			break;
 		}
 		if (beamArmed) {
@@ -1089,7 +1106,7 @@ RunResult Machine::step(int count) {
 		const bool intDue = interruptDue();
 		const int len = (m_coverage.on && !intDue) ? instrLen(pcBefore) : 1;
 		const int t0 = c->tickCount;
-		const long long ns = execOne();
+		const long long ns = execOne(intDue);
 		const int t = (int)((unsigned)c->tickCount - (unsigned)t0);
 		r.t += t;
 		r.ns += ns;
@@ -1106,11 +1123,13 @@ RunResult Machine::step(int count) {
 			c->flgFRM = 0;
 			r.frames++;
 			if (m_profile.on) m_profile.frames++;
+			m_fdc.sync(c);
 			video::historyPush(c);
 		}
 	}
 	c->flgDBG = savedDebug;
 	c->flgBRK = 0;
+	m_fdc.takeStop();		// stepping ignores stops, the controller's too
 	r.pc = cpu_get_pc(c->cpu);
 	r.reason = "steps";
 	stampBeam(r);
@@ -1159,7 +1178,7 @@ FrameCost Machine::frameCost(int sync, long long maxInstructions, bool instrumen
 		const bool intDue = interruptDue();
 		const int len = (instrument && m_coverage.on && !intDue) ? instrLen(pcBefore) : 1;
 		const int t0 = c->tickCount;
-		const long long ns = execOne();
+		const long long ns = execOne(intDue);
 		const int t = (int)((unsigned)c->tickCount - (unsigned)t0);
 		const int haltedAfter = c->cpu->flgHALT;
 		const bool intTaken = intDue && !c->cpu->flgIFF1;
@@ -1182,6 +1201,7 @@ FrameCost Machine::frameCost(int sync, long long maxInstructions, bool instrumen
 			c->flgFRM = 0;
 			fc.interrupts++;
 			if (instrument && m_profile.on) m_profile.frames++;
+			m_fdc.sync(c);
 			video::historyPush(c);
 		}
 
@@ -1647,6 +1667,114 @@ void Machine::setIoBreak(int port, unsigned char flags) {
 		return;
 	}
 	m_comp->brkIOMap[port & 0xffff] = flags;
+}
+
+// ---------------------------------------------------------------- checkpoints
+
+struct Machine::Held {
+	Checkpoint info;
+	std::unique_ptr<xState, void (*)(xState*)> st{nullptr, xstate_destroy};
+};
+
+void Machine::afterStateLoad(const char* why) {
+	reapplyDriveGeom();
+	video::historyClear();
+	kbdReleaseAll(m_comp->keyb);
+	m_comp->flgBRK = 0;
+	m_fdc.discontinuity(m_comp, why);
+}
+
+static std::string imageOf(Computer* c, int i) {
+	Floppy* f = c->dif ? c->dif->flp[i] : nullptr;
+	return (f && f->insert && f->path) ? f->path : "";
+}
+
+bool Machine::saveCheckpoint(const std::string& name, std::string& err) {
+	if (name.empty()) { err = "name required"; return false; }
+	auto h = std::make_shared<Held>();
+	h->st.reset(xstate_create());
+	if (!h->st || !xstate_save(h->st.get(), m_comp)) {
+		err = "the core could not take the state";
+		return false;
+	}
+	h->info.name = name;
+	h->info.model = m_model;
+	h->info.machineId = m_machineId;
+	h->info.memoryKb = m_memoryKb;
+	for (int i = 0; i < 4; i++) h->info.images[i] = imageOf(m_comp, i);
+	h->info.savedT = m_fdc.now(m_comp);
+	h->info.frame = m_comp->vid->fcnt;
+	const unsigned char* data = nullptr;
+	h->info.bytes = xstate_bytes(h->st.get(), &data, nullptr);
+	m_checkpoints[name] = h;
+	return true;
+}
+
+bool Machine::loadCheckpoint(const std::string& name, std::string& err,
+			     std::vector<std::string>& warnings) {
+	auto it = m_checkpoints.find(name);
+	if (it == m_checkpoints.end()) { err = "no checkpoint '" + name + "'"; return false; }
+	const Held& h = *it->second;
+	// The core only refuses a state whose memory chunks moved; a Pentagon and
+	// a +3 lay theirs out alike, and the bytes would load into the wrong board.
+	if (h.info.model != m_model || h.info.machineId != m_machineId || h.info.memoryKb != m_memoryKb) {
+		err = "checkpoint '" + name + "' was taken on " + h.info.model + " with " +
+		      std::to_string(h.info.memoryKb) + "K and the machine has changed since (now " +
+		      m_model + " with " + std::to_string(m_memoryKb) + "K)";
+		return false;
+	}
+	m_fdc.sync(m_comp);
+	if (!xstate_load(h.st.get(), m_comp)) {
+		err = "checkpoint '" + name + "' was taken on " + h.info.model +
+		      " and the machine has changed since (model, memory or hardware)";
+		return false;
+	}
+	afterStateLoad("checkpoint");
+	for (int i = 0; i < 4; i++) {
+		const std::string now = imageOf(m_comp, i);
+		if (now != h.info.images[i])
+			warnings.push_back("drive " + std::to_string(i) + " holds " +
+					   (now.empty() ? std::string("no image") : now) + ", the checkpoint was taken with " +
+					   (h.info.images[i].empty() ? std::string("none") : h.info.images[i]) +
+					   ": the controller and the angle are restored, the disk contents are not");
+	}
+	return true;
+}
+
+bool Machine::dropCheckpoint(const std::string& name) {
+	if (name.empty()) {
+		const bool any = !m_checkpoints.empty();
+		m_checkpoints.clear();
+		return any;
+	}
+	return m_checkpoints.erase(name) > 0;
+}
+
+std::vector<Machine::Checkpoint> Machine::checkpoints() const {
+	std::vector<Checkpoint> out;
+	for (const auto& kv : m_checkpoints) out.push_back(kv.second->info);
+	return out;
+}
+
+void* Machine::takeState(std::string& err) {
+	xState* st = xstate_create();
+	if (!st || !xstate_save(st, m_comp)) {
+		if (st) xstate_destroy(st);
+		err = "the core could not take the state";
+		return nullptr;
+	}
+	return st;
+}
+
+bool Machine::putState(void* st, const char* why) {
+	m_fdc.sync(m_comp);
+	if (!st || !xstate_load(static_cast<xState*>(st), m_comp)) return false;
+	afterStateLoad(why);
+	return true;
+}
+
+void Machine::freeState(void* st) {
+	if (st) xstate_destroy(static_cast<xState*>(st));
 }
 
 } // namespace xsp

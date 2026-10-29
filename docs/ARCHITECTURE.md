@@ -154,6 +154,17 @@ opcode of the instruction that handed control over, and a `ret` means a callee c
 rather than a new invocation. The read happens only on the transition, a few thousand times a
 frame rather than a few hundred thousand, so per-instruction cost is unchanged.
 
+The disk controller is watched from the same place. `execOne()`, which every loop calls, asks
+the monitor in `xsp_fdc.cpp` whether the next instruction can touch the WD1793 at all - the
+controller has a command plan running, or the TR-DOS ROM is paged in and its ports are being
+decoded - and only then takes a picture of the controller before `compExec()` and compares
+after it. The rest of the time it is three loads and a branch, inlined. The comparison is
+where the journal, the lost-byte count and the `fdc_break` stops come from; the phases are
+read from the step of the core's command plan, a mirror of the tables in `wd1793.c` that the
+smoke suite would catch drifting. Its T counter is the core's `tickCount` folded in lazily,
+once a frame and at every look, and a counter that went backwards (a state load) is a
+discontinuity rather than four billion T-states.
+
 `frameCost()` runs the same loop for a different question - it stops on a frame boundary and
 splits the time into work and the HALT wait - and feeds the same instrumentation, so one pass
 can measure a frame and profile it at once. The partial frame it runs to reach the first

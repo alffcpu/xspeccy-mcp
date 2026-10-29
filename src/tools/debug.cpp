@@ -88,9 +88,14 @@ void registerDebugTools() {
 	     });
 
 	tool("clear_breakpoints",
-	     "Remove every breakpoint set through this server (memory, address and I/O).",
+	     "Remove every breakpoint set through this server (memory, address, I/O and the "
+	     "disk controller's fdc_break stops).",
 	     json{},
-	     [](const json&) { mach().clearBreaks(); return json{{"ok", true}}; });
+	     [](const json&) {
+		     mach().clearBreaks();
+		     mach().fdc().breaks() = fdc::Breaks();
+		     return json{{"ok", true}};
+	     });
 
 	tool("set_port_breakpoint",
 	     "Break on an I/O port access. access: read, write or both. This is how paging and "

@@ -159,6 +159,7 @@ void registerAll() {
 	registerAudioTools();
 	registerInputTools();
 	registerMediaTools();
+	registerDiskTools();
 }
 
 } // namespace tools

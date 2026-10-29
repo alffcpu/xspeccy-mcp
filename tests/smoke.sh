@@ -1607,6 +1607,230 @@ checkr "$OUTR" "label table: address once"         38 'labels\\":\[{\\"address_h
 checkr "$OUTR" "source_at rows: address once"      40 'source\\":\[{\\"address_hex' '\\"source\\":\[{\\"address\\":'
 checkr "$OUTP" "--pretty indents them"             12 '{\\n\\t\\"address'
 
+# The Beta Disk's WD1793 as a debugger sees it. A .trd made here (every byte
+# of a sector is its logical track * 7 + sector * 13 + offset, so any byte
+# says where it came from) and three programs in RAM that drive the controller
+# the way a track loader does: out (c),a at #2A53 and the INTRQ/DRQ loop at
+# #3FE5 in the TR-DOS ROM, reached by jp #3D2F with the address on the stack.
+# P1 restores and reads sector 1 with interrupts off; P2 reads sectors 1..16
+# with an IM2 handler that runs 1120 T, ten times the 112 T a byte waits in
+# the data register; P3 writes a command while the controller is busy, forces
+# an interrupt, and reads an address field.
+FDC_TRD="$TMPD/fdc.trd"; FDC_TRD_N=$(native "$FDC_TRD")
+python3 - "$FDC_TRD" <<'PY'
+import sys
+img = bytearray()
+for lt in range(160):
+    for s in range(16):
+        img += bytes(((lt * 7 + s * 13 + i) & 255) for i in range(256))
+cat = bytearray(16)
+cat[0:8] = b'TESTDATA'; cat[8] = ord('C')
+cat[9:11] = (0x7000).to_bytes(2, 'little'); cat[11:13] = (4096).to_bytes(2, 'little')
+cat[13] = 16; cat[14] = 0; cat[15] = 1	# logical track 1 = cylinder 0, side 1
+img[0:256] = bytes(cat) + bytes(240)
+sys_ = bytearray(256)
+sys_[0xe2] = 2; sys_[0xe3] = 0x16; sys_[0xe4] = 1; sys_[0xe5:0xe7] = (2544).to_bytes(2, 'little'); sys_[0xe7] = 0x10
+img[8 * 256:9 * 256] = sys_
+open(sys.argv[1], 'wb').write(img)
+PY
+FDC_TBL=$(printf '7F %.0s' $(seq 1 257))
+fcall() { printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$2" "$3"; }
+FDC_TAIL='"outc: ld de,$2a53","dos: push de","jp $3d2f","wait: ld c,$7f","ld de,$3fe5","jr dos"'
+FDC_P1='["start: di","ld sp,$5ff0","ld a,$3c","ld c,$ff","call outc","ld a,$08","ld c,$1f","call outc","call wait","ld a,$01","ld c,$5f","call outc","ld hl,$7000","ld a,$80","ld c,$1f","call outc","call wait","done: jr done",'"$FDC_TAIL"']'
+FDC_P2='["start: di","ld sp,$5ff0","ld a,$7e","ld i,a","im 2","ld a,$3c","ld c,$ff","call outc","ld a,$08","ld c,$1f","call outc","call wait","ld a,1","ld ($6200),a","ei","loop: ld a,($6200)","ld c,$5f","call outc","ld hl,$7000","ld a,$80","ld c,$1f","call outc","call wait","ld hl,$6200","inc (hl)","ld a,(hl)","cp 17","jr nz,loop","di","done: jr done",'"$FDC_TAIL"']'
+FDC_P3='["start: di","ld sp,$5ff0","ld a,$3c","ld c,$ff","call outc","ld a,$80","ld c,$1f","call outc","ld a,$80","ld c,$1f","call outc","ld a,$d0","ld c,$1f","call outc","ld hl,$7100","ld a,$c0","ld c,$1f","call outc","call wait","done: jr done",'"$FDC_TAIL"']'
+OUTF="$TMPD/fdc.out"
+{
+	echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+	echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+	fcall 600 load_file "{\"path\":\"$FDC_TRD_N\"}"
+	fcall 601 reset '{"mode":"48","boot_frames":50}'
+	# the restore a reset starts is a command no instruction wrote
+	fcall 602 fdc_log '{"count":1}'
+	fcall 603 assemble '{"address":"$6000","lines":'"$FDC_P1"'}'
+	fcall 604 set_register '{"name":"PC","value":"$6000"}'
+	fcall 605 checkpoint '{"action":"save","name":"p1"}'
+	fcall 606 fdc_log '{"action":"clear"}'
+	fcall 607 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 608 fdc_log '{"count":3}'
+	fcall 609 fdc_log '{"action":"summary"}'
+	fcall 610 fdc_state '{}'
+	fcall 611 disk_sector '{"action":"verify","address":"$7000","length":256,"cylinder":0,"side":0,"sector":1}'
+	fcall 612 disk_track '{"cylinder":0}'
+	# a fault on the data CRC: the command ends on it, and a stop catches it
+	fcall 613 checkpoint '{"action":"load","name":"p1"}'
+	fcall 614 disk_track '{"action":"fault","cylinder":0,"side":0,"sector":1,"kind":"crc_data"}'
+	fcall 615 fdc_break '{"on":["crc_error"]}'
+	fcall 616 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 617 disk_track '{"action":"clear_faults"}'
+	fcall 618 disk_track '{"cylinder":0}'
+	# an ID taken off the track: five revolutions, then not found
+	fcall 619 checkpoint '{"action":"load","name":"p1"}'
+	fcall 620 disk_track '{"action":"fault","cylinder":0,"side":0,"sector":1,"kind":"no_id"}'
+	fcall 621 fdc_break '{"clear":true,"on":["error"]}'
+	fcall 622 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 623 fdc_log '{"count":1}'
+	fcall 624 disk_track '{"action":"clear_faults"}'
+	fcall 625 fdc_break '{"clear":true}'
+	# a faster drive: every byte comes 5% sooner
+	fcall 626 checkpoint '{"action":"load","name":"p1"}'
+	fcall 627 disk '{"action":"setup","rpm_percent":5}'
+	fcall 628 fdc_log '{"action":"clear"}'
+	fcall 629 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 630 fdc_log '{"action":"summary"}'
+	# a motor that takes 300 ms to come up: the restore waits for it
+	fcall 631 disk '{"action":"setup","rpm_percent":0,"spinup_ms":300}'
+	fcall 632 checkpoint '{"action":"load","name":"p1"}'
+	fcall 633 fdc_log '{"action":"clear"}'
+	fcall 634 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 635 fdc_log '{"count":2}'
+	fcall 636 disk '{"action":"setup","spinup_ms":0,"angle_deg":90}'
+	# P2: an interrupt handler longer than a byte's window
+	fcall 637 write_memory "{\"address\":\"\$7E00\",\"hex\":\"$FDC_TBL\"}"
+	fcall 638 assemble '{"address":"$7F7F","lines":["jp $6100"]}'
+	fcall 639 assemble '{"address":"$6100","lines":["push bc","ld b,80","il: djnz il","pop bc","ei","jp $3d2f"]}'
+	fcall 640 assemble '{"address":"$6000","lines":'"$FDC_P2"'}'
+	fcall 641 set_register '{"name":"PC","value":"$6000"}'
+	fcall 642 disk '{"action":"setup","angle_deg":0}'
+	fcall 643 checkpoint '{"action":"save","name":"p2"}'
+	fcall 644 fdc_log '{"action":"clear"}'
+	fcall 645 run '{"stop_pc":"$6040","max_frames":300}'
+	fcall 646 fdc_log '{"action":"summary"}'
+	# the first lost byte the log names is the first byte the CPU got wrong
+	fcall 647 checkpoint '{"action":"load","name":"p2"}'
+	fcall 648 fdc_break '{"on":["lost_data"]}'
+	fcall 649 run '{"stop_pc":"$6040","max_frames":300}'
+	fcall 650 save_snapshot "{\"path\":\"$(native "$TMPD/fdc-mid.sna")\"}"
+	fcall 651 checkpoint '{"action":"save","name":"mid"}'
+	fcall 652 fdc_state '{}'
+	fcall 653 fdc_break '{"clear":true}'
+	fcall 654 run '{"stop_pc":"$6036","max_frames":300}'
+	fcall 655 fdc_log '{"count":1}'
+	fcall 656 disk_sector '{"action":"verify","address":"$7000","length":256,"cylinder":0,"side":0,"sector":2}'
+	# a checkpoint mid-transfer resumes it: the same run twice, the same end
+	fcall 657 run '{"stop_pc":"$6040","max_frames":300}'
+	fcall 658 checkpoint '{"action":"load","name":"mid"}'
+	fcall 659 run '{"stop_pc":"$6036","max_frames":300}'
+	fcall 660 run '{"stop_pc":"$6040","max_frames":300}'
+	# every angle of the disk, and the machine back where it was
+	fcall 661 checkpoint '{"action":"load","name":"p2"}'
+	fcall 662 fdc_sweep '{"stop_pc":"$6040","angles":4,"max_frames":300,"verify":{"address":"$7000","length":256,"cylinder":0,"side":0,"sector":16}}'
+	fcall 663 get_registers '{}'
+	fcall 664 fdc_log '{"count":1}'
+	# taken + lost = delivered at every angle: a byte the CPU did not take is
+	# one the log calls lost, and the other way round. An interrupt accepted
+	# on top of an ini is the case that breaks it, and only some angles put
+	# one there
+	for k in $(seq 0 23); do
+		fcall $((700 + k * 4)) checkpoint '{"action":"load","name":"p2"}'
+		fcall $((701 + k * 4)) disk "{\"action\":\"setup\",\"angle_deg\":$((k * 15))}"
+		fcall $((702 + k * 4)) fdc_log '{"action":"clear"}'
+		fcall $((703 + k * 4)) run '{"stop_pc":"$6040","max_frames":300}'
+		fcall $((800 + k)) fdc_log '{"action":"summary"}'
+	done
+	# P3: a command into a busy controller, a force interrupt, an address field
+	fcall 665 assemble '{"address":"$6000","lines":'"$FDC_P3"'}'
+	fcall 666 set_register '{"name":"PC","value":"$6000"}'
+	fcall 667 fdc_log '{"action":"clear"}'
+	fcall 668 run '{"max_frames":10}'
+	fcall 669 fdc_log '{"count":5}'
+	# stops by command, by an ID under the head, and through a TR-DOS name
+	fcall 670 checkpoint '{"action":"load","name":"p1"}'
+	fcall 671 fdc_break '{"command":"read_sector"}'
+	fcall 672 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 673 disassemble '{"address":"$3FE5","count":1}'
+	fcall 674 fdc_break '{"clear":true,"id":{"cylinder":0,"side":0,"sector":1}}'
+	fcall 675 run '{"stop_pc":"$6029","max_frames":100}'
+	fcall 676 clear_breakpoints '{}'
+	fcall 677 fdc_break '{}'
+	fcall 678 checkpoint '{"action":"load","name":"p1"}'
+	fcall 679 run '{"stop_pc":"trdos.read_bytes","max_frames":100}'
+	fcall 680 disassemble '{"address":"$3FE5","count":1}'
+	# the image itself
+	fcall 681 disk_sector '{"action":"read","cylinder":1,"side":1,"sector":16}'
+	fcall 682 disk_sector '{"action":"write","cylinder":0,"side":0,"sector":2,"hex":"DE AD BE EF"}'
+	fcall 683 disk_sector '{"action":"read","cylinder":0,"side":0,"sector":2}'
+	fcall 684 disk_sector '{"action":"verify","address":"$7000","length":256,"file":"TESTDATA.C"}'
+	fcall 685 disk_sector '{"action":"verify","address":"$7000","file":"NOSUCH"}'
+	fcall 686 checkpoint '{"action":"list"}'
+	fcall 687 fdc_state '{"trdos":true}'
+	# no Beta Disk, no WD1793
+	fcall 688 machine_config '{"model":"zxplus3","boot_frames":0}'
+	fcall 689 fdc_state '{}'
+	fcall 690 checkpoint '{"action":"load","name":"p1"}'
+} | "$BIN" --config "$(native "$CFG")" > "$OUTF" 2>/dev/null
+echo
+checkr "$OUTF" "reset's restore logged without a PC"   602 'cmd\\":\\"restore\\".*value_hex\\":\\"\$03' 'pc_hex'
+checkr "$OUTF" "#FF write row, named ROM entry"        608 'pc_name\\":\\"trdos.out_c\\",\\"side\\":0,\\"sys_hex\\":\\"\$3C'
+checkr "$OUTF" "restore row has registers before it"   608 'cmd\\":\\"restore\\".*track\\":0,\\"value_hex\\":\\"\$08'
+checkr "$OUTF" "read_sector: ID, 256 bytes, no loss"   608 'sectors\\":\[{\\"bytes\\":256,\\"data_t\\":[0-9]*,\\"found_t\\":[0-9]*,\\"id\\":\[0,0,1,1\]}\]' 'lost'
+checkr "$OUTF" "summary: one sector, all of it"        609 'delivered\\":256,\\"lost\\":0'
+checkr "$OUTF" "transfer is 256 bytes of 112 T"        609 'transfer\\":28691'
+checkr "$OUTF" "byte window is 112 T at 3.5 MHz"       609 'byte_window_t\\":112'
+checkr "$OUTF" "fdc_state: idle, INTRQ up"             610 'intrq\\":true'
+checkr "$OUTF" "fdc_state: next IDs come round"        610 'next_ids\\":\[{\\"in_t'
+checkr "$OUTF" "fdc_state: a revolution is 700000 T"   610 'revolution_t\\":700000'
+checkr "$OUTF" "loaded sector matches the disk"        611 'ok\\":true'
+checkr "$OUTF" "track layout: TR-DOS interleave"       612 'order\\":\\"1 9 2 10 3 11 4 12 5 13 6 14 7 15 8 16\\"'
+checkr "$OUTF" "fault crc_data shows in the layout"    614 'data_crc\\":false,\\"fault\\":\\"crc_data\\",\\"id\\":\[0,0,1,1\]'
+checkr "$OUTF" "crc fault stops the run"               616 'fdc_event\\":\\"crc error in read_sector sector 0/0/1'
+checkr "$OUTF" "clear_faults gives the CRC back"       618 'data_at\\":104,\\"data_crc\\":true,\\"id\\":\[0,0,1,1\]'
+checkr "$OUTF" "no_id: the error stop says not found"  622 'error in read_sector: not_found'
+checkr "$OUTF" "no_id: five revolutions first"         623 'revolutions\\":5,.*not_found'
+checkr "$OUTF" "rpm +5%: bytes come sooner"            630 'byte_window_t\\":107.*transfer\\":27319'
+checkr "$OUTF" "spin-up 300 ms holds the restore"      635 'cmd\\":\\"restore\\",\\"disk_pos\\":[0-9]*,\\"drive\\":0,\\"duration_t\\":1050[0-9][0-9][0-9]'
+checkr "$OUTF" "spin-up shown on the row"              635 'spinup_ms\\":300'
+checkr "$OUTF" "setup turns the disk"                  636 'angle_deg\\":90'
+checkr "$OUTF" "IM2 handler breaks seven sectors"      646 'sectors_lost_data\\":7'
+checkr "$OUTF" "delivered = taken + lost"              646 'data_port\\":4028,\\"delivered\\":4096,\\"lost\\":68'
+checkr "$OUTF" "interrupts against the byte window"    646 'during_transfer\\":7,\\"longest_handler_t\\":1120'
+checkr "$OUTF" "the log's T does not jump on a load"   646 'since_t\\":[0-9]\{1,9\},'
+checkr "$OUTF" "lost-data stop names the byte"         649 'fdc_event\\":\\"lost data: sector 0/0/2 byte 224'
+checkr "$OUTF" ".sna mid-command is warned about"      650 'middle of a command'
+checkr "$OUTF" "fdc_state mid-transfer"                652 'lost_data\\":true,\\"phase\\":\\"transfer\\"'
+checkr "$OUTF" "log: first lost byte 224, 10 lost"     655 'first_lost\\":224,.*lost\\":10'
+checkr "$OUTF" "memory goes wrong at that byte"        656 'offset\\":224,'
+checkr "$OUTF" "and ten bytes on"                      656 'disk_hex\\":\\"\$ED\\",\\"memory_hex\\":\\"\$F7'
+checkr "$OUTF" "sweep reached at every angle"          662 'failed\\":[0-9],\\"reached\\":4,\\"runs\\":4'
+checkr "$OUTF" "sweep: the angle changes the time"     662 't_max\\":[0-9]*,\\"t_mean' 'spread_frames\\":0[,}]'
+checkr "$OUTF" "sweep puts the machine back"           663 'pc_hex\\":\\"\$6000'
+checkr "$OUTF" "sweep leaves the log alone"            664 'last\\":[0-9]*,\\"now_t'
+checkr "$OUTF" "busy controller ignores a command"     669 'ignored\\":\\"read_sector\\".*why\\":\\"busy'
+checkr "$OUTF" "D0 ends the running command"           669 'end\\":\\"forced'
+checkr "$OUTF" "force interrupt has its own row"       669 'cmd\\":\\"force_interrupt'
+checkr "$OUTF" "read address finds sector 1's ID"      669 'cmd\\":\\"read_address.*bytes\\":6,.*id\\":\[0,0,1,1\]'
+checkr "$OUTF" "command stop"                          672 'fdc_event\\":\\"command read_sector (\$80)'
+checkr "$OUTF" "ROM name while TR-DOS is paged"        673 'label\\":\\"trdos.read_bytes'
+checkr "$OUTF" "ID under the head stop"                675 'fdc_event\\":\\"id 0/0/1 under the head'
+checkr "$OUTF" "clear_breakpoints clears fdc stops"    677 'armed\\":\[\]'
+checkr "$OUTF" "stop_pc takes a trdos.* name"          679 'pc_hex\\":\\"\$3FE5\\",\\"reason\\":\\"pc'
+checkr "$OUTF" "raw sector read"                       681 'hex\\":\\"D8D9DADB'
+checkr "$OUTF" "raw sector write"                      683 'hex\\":\\"DEADBEEF1112'
+checkr "$OUTF" "verify by file starts at its sector"   684 'from\\":\[0,1,1\]'
+checkr "$OUTF" "verify of a missing file refused"      685 'no file .NOSUCH.'
+checkr "$OUTF" "checkpoints listed"                    686 'name\\":\\"mid'
+checkr "$OUTF" "TR-DOS variables decoded"              687 'trdos\\":{\\"bad_sectors'
+checkr "$OUTF" "no Beta Disk refused"                  689 'no Beta Disk interface'
+checkr "$OUTF" "checkpoint refuses another machine"    690 'machine has changed since'
+FBAD=""
+for k in $(seq 0 23); do
+	set -- $(grep "\"id\":$((800 + k))," "$OUTF" | grep -o 'data_port\\":[0-9]*,\\"delivered\\":[0-9]*,\\"lost\\":[0-9]*' | tr -c '0-9' ' ')
+	if [ $# -ne 3 ] || [ $(($1 + $3)) -ne "$2" ]; then FBAD="$FBAD $((k * 15))"; fi
+done
+if [ -z "$FBAD" ]; then
+	echo "  ok   taken + lost = delivered at 24 angles"
+else
+	echo "  FAIL taken + lost = delivered at 24 angles (off at:$FBAD)"; fail=1
+fi
+# the run resumed from a checkpoint mid-transfer ends where the first one did
+F657=$(grep '"id":657,' "$OUTF" | grep -o 'instructions\\":[0-9]*'); F660=$(grep '"id":660,' "$OUTF" | grep -o 'instructions\\":[0-9]*')
+F654=$(grep '"id":654,' "$OUTF" | grep -o 'instructions\\":[0-9]*'); F659=$(grep '"id":659,' "$OUTF" | grep -o 'instructions\\":[0-9]*')
+if [ -n "$F657" ] && [ "$F657" = "$F660" ] && [ "$F654" = "$F659" ]; then
+	echo "  ok   checkpoint mid-command resumes exactly"
+else
+	echo "  FAIL checkpoint mid-command resumes exactly ($F654/$F657 vs $F659/$F660)"; fail=1
+fi
+
 echo
 cli "--version reports both versions" 0 "Xpeccy" --version
 cli "--help prints usage"             0 "usage:" --help

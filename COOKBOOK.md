@@ -520,7 +520,54 @@ If that comes back as a screenful of noise, check `machine_state`: a `disk_inter
 `none` means the ROM is waiting on a drive that does not exist. Every ZX model gets one
 automatically, so this should only ever happen on hardware that never had a drive.
 
+## Debug a loader that drives the disk controller
+
+A track loader, a fast reader, anything that calls the TR-DOS ROM from RAM: start it, and
+stop the moment something goes wrong rather than reading the result afterwards.
+
+```jsonc
+load_file   {"path": "demo.trd"}
+fdc_log     {"action": "clear"}
+fdc_break   {"on": ["error", "lost_data"]}
+run         {"stop_pc": "loader_done", "max_frames": 1000}
+// → reason "fdc", fdc_event "lost data: sector 5/0/3 byte 222"
+fdc_state   {}                    // the command, its phase, what is under the head
+fdc_log     {"count": 3}          // the sector's ID, its lost bytes, the interrupt behind them
+```
+
+A lost byte is the CPU not taking a byte within the 112 T it waits in the data register;
+`isr_max_t` in that sector's record is the handler that was running. Then the whole load:
+
+```jsonc
+fdc_log     {"action": "summary"}
+// sectors_lost_data, time finding IDs against time transferring, revolutions, bytes_per_s
+// against ceiling_bytes_per_s - the gap is what reading in arrival order can win back
+```
+
+An emulator starts the disk at the same angle every run, so one lucky angle can hide a bad
+one. Check them all, with memory compared to the file each time:
+
+```jsonc
+fdc_sweep   {"stop_pc": "loader_done", "angles": 16,
+             "verify": {"address": "$6000", "file": "PART2.C"}}
+```
+
+Faults show what the loader does when the disk is bad - `disk_track {"action": "fault",
+"cylinder": 5, "side": 0, "sector": 3, "kind": "crc_data"}`, then `clear_faults`. A slower
+drive is `disk {"action": "setup", "rpm_percent": -2}`.
+
+To come back to the middle of a load, use `checkpoint`, not `save_snapshot`: a `.sna` has no
+room for the controller, and a load saved halfway never finishes from it.
+
+```jsonc
+checkpoint  {"action": "save", "name": "mid-load"}
+...
+checkpoint  {"action": "load", "name": "mid-load"}
+```
+
 ## Try a hypothesis and roll it back
 
 Snapshots are the cheap undo: `save_snapshot` before an experiment, `load_file` on the same
-path to get back. Handy when poking memory to test a theory about a bug.
+path to get back. Handy when poking memory to test a theory about a bug. `checkpoint` is the
+same in memory and keeps what a `.sna` loses - the disk controller in the middle of a command,
+the angle of the disk - but only while this server process runs.

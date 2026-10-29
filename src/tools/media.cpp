@@ -1982,8 +1982,10 @@ void registerMediaTools() {
 		     // not a reason to undo it: the disk the loader just wrote must
 		     // keep the geometry it was formatted with
 		     c = mach().comp();
-		     if (diskImage)
+		     if (diskImage) {
 			     mach().noteDriveGeom(drv & 3, c->dif->flp[drv & 3]->trklen);
+			     mach().faults().forget(drv & 3);
+		     }
 		     // snapshot loaders compReset internally -> zx_init -> DD
 		     // geometry on every drive; put back what the mounts need
 		     mach().reapplyDriveGeom();
@@ -2049,11 +2051,17 @@ void registerMediaTools() {
 
 	tool("disk",
 	     "Floppy drives: state, insert a .trd/.scl image, eject, or save the current image back to "
-	     "a file. Drive 0 is A.",
+	     "a file. Drive 0 is A. setup changes the drive itself: angle_deg turns the disk (where "
+	     "the next command starts), rpm_percent makes it faster or slower, spinup_ms delays a "
+	     "command while the motor comes up to speed, write_protect.",
 	     json{{"properties", {
-		     {"action", {{"type", "string"}, {"description", "state | insert | eject | save"}}},
+		     {"action", {{"type", "string"}, {"description", "state | insert | eject | save | setup"}}},
 		     {"drive", {{"type", "integer"}, {"description", "0..3, default 0"}}},
-		     {"path", {{"type", "string"}}}
+		     {"path", {{"type", "string"}}},
+		     {"angle_deg", {{"type", "number"}}},
+		     {"rpm_percent", {{"type", "number"}, {"description", "-10..10"}}},
+		     {"spinup_ms", {{"type", "integer"}, {"description", "0..1000"}}},
+		     {"write_protect", {{"type", "boolean"}}}
 	     }}},
 	     [](const json& a) {
 		     Computer* c = mach().comp();
@@ -2167,7 +2175,9 @@ void registerMediaTools() {
 			     // others', in case a loader's zx_init shrunk them
 			     mach().noteDriveGeom(drv, c->dif->flp[drv & 3]->trklen);
 			     mach().reapplyDriveGeom();
+			     mach().faults().forget(drv);	// they were on the disk that went out
 		     } else if (action == "eject") {
+			     mach().faults().forget(drv);
 			     flp->insert = 0;
 			     // the HD length an .ima set goes with the disk: the next
 			     // image comes into the DD drive zx_init would have made
@@ -2178,16 +2188,48 @@ void registerMediaTools() {
 			     int res = saveTRD(c, path.c_str(), drv);
 			     if (res != ERR_OK)
 				     throw std::runtime_error("save failed with code " + std::to_string(res));
+		     } else if (action == "setup") {
+			     auto& tw = mach().fdc().tweak(drv);
+			     double v = 0;
+			     if (argDouble(a, "rpm_percent", v)) {
+				     if (v < -10 || v > 10) throw std::runtime_error("rpm_percent must be -10..10");
+				     tw.rpmPercent = v;
+			     }
+			     if (a.contains("spinup_ms")) tw.spinupMs = argNumRange(a, "spinup_ms", 0, 0, 1000);
+			     if (a.contains("write_protect")) flp->protect = argBool(a, "write_protect", false) ? 1 : 0;
+			     if (argDouble(a, "angle_deg", v)) {
+				     if (!flp->insert || flp->trklen <= 0)
+					     throw std::runtime_error("no disk in drive " + std::to_string(drv) + " to turn");
+				     double d = std::fmod(v, 360.0);
+				     if (d < 0) d += 360.0;
+				     flp->pos = (int)std::lround(d / 360.0 * flp->trklen) % flp->trklen;
+				     flp->index = flp->pos < 4 ? 1 : 0;
+			     }
 		     } else if (action != "state") {
 			     throw std::runtime_error("unknown disk action '" + action + "'");
 		     }
 		     // an inserted image the machine has no controller for reads as a working setup
 		     // right up to the point the ROM waits for a drive that will never answer
-		     return json{{"drive", drv}, {"inserted", flp->insert ? true : false},
+		     json st = {{"drive", drv}, {"inserted", flp->insert ? true : false},
 			     {"path", flp->path ? flp->path : ""},
 			     {"changed", flp->changed ? true : false},
 			     {"track_bytes", flp->trklen},
 			     {"interface", diskInterfaceName(c->dif->type)}};
+		     if (flp->insert && flp->trklen > 0)
+			     st["angle_deg"] = std::round(flp->pos * 3600.0 / flp->trklen) / 10.0;
+		     if (flp->protect) st["write_protect"] = true;
+		     const auto& tw = mach().fdc().tweak(drv);
+		     if (tw.rpmPercent != 0.0) st["rpm_percent"] = tw.rpmPercent;
+		     if (tw.spinupMs) st["spinup_ms"] = tw.spinupMs;
+		     const size_t nf = mach().faults().list(drv).size();
+		     if (nf) {
+			     st["faults"] = nf;
+			     // a saved image carries them: they are bytes on the tracks
+			     if (action == "save")
+				     st["warning"] = std::to_string(nf) + " fault(s) from disk_track are on this disk "
+						     "and were saved with it";
+		     }
+		     return st;
 	     });
 
 	tool("disk_catalog",
@@ -2288,9 +2330,16 @@ void registerMediaTools() {
 	     json{{"properties", {{"path", {{"type", "string"}}}}}, {"required", json::array({"path"})}},
 	     [](const json& a) {
 		     std::string path = argStr(a, "path");
-		     int res = saveSNA(mach().comp(), path.c_str(), 0);
+		     Computer* c = mach().comp();
+		     int res = saveSNA(c, path.c_str(), 0);
 		     if (res != ERR_OK) throw std::runtime_error("save failed with code " + std::to_string(res));
-		     return json{{"path", path}, {"ok", true}};
+		     json j = {{"path", path}, {"ok", true}};
+		     const FDC* f = c->dif ? c->dif->fdc : nullptr;
+		     if (f && f->plan && !f->idle)
+			     j["warning"] = "the disk controller is in the middle of a command, and a .sna has no "
+					    "room for it or for the angle of the disk: a load in progress will not "
+					    "resume from this file. checkpoint keeps both (in this server process)";
+		     return j;
 	     });
 }
 

@@ -89,6 +89,7 @@ void registerTimingTools();
 void registerAudioTools();
 void registerInputTools();
 void registerMediaTools();
+void registerDiskTools();
 
 } // namespace tools
 } // namespace xsp

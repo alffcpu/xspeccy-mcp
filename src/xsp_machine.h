@@ -4,11 +4,13 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "xsp_audio.h"
 #include "xsp_config.h"
+#include "xsp_fdc.h"
 #include "xsp_labels.h"
 #include "xsp_listing.h"
 
@@ -129,7 +131,8 @@ struct BeamLog {
 };
 
 struct RunResult {
-	std::string reason;		// steps|breakpoint|pc|frames|halt|budget|beam
+	std::string reason;		// steps|breakpoint|pc|frames|halt|budget|beam|fdc
+	std::string fdc;		// reason=fdc: the controller event that stopped it
 	int pc = 0;
 	long long instructions = 0;
 	// interrupts accepted on the way: each is a step that ran no instruction,
@@ -273,6 +276,32 @@ public:
 	int bankAt(int adr) const;		// which page is mapped there right now
 
 	Computer* comp() const { return m_comp; }
+	fdc::Monitor& fdc() { return m_fdc; }
+	fdc::Faults& faults() { return m_faults; }
+
+	// Whole-machine states kept in this process (core xstate): the controller
+	// mid-command and the angle of the disk included, which a .sna has no room
+	// for. Not written to a file - the state holds pointers into the core's
+	// own tables, which the next run of the server has somewhere else.
+	struct Checkpoint {
+		std::string name;
+		std::string model, machineId;
+		int memoryKb = 0;
+		std::string images[4];		// what was in the drives, to warn on load
+		long long savedT = 0;		// fdc monitor T at the save
+		int frame = 0;
+		size_t bytes = 0;
+	};
+	bool saveCheckpoint(const std::string& name, std::string& err);
+	// warnings: what is not as it was (another image in a drive)
+	bool loadCheckpoint(const std::string& name, std::string& err, std::vector<std::string>& warnings);
+	bool dropCheckpoint(const std::string& name);
+	std::vector<Checkpoint> checkpoints() const;
+	// An unnamed one for a tool that runs and puts the machine back (fdc_sweep).
+	// The Computer is still the one it was taken from, or the load fails.
+	void* takeState(std::string& err);
+	bool putState(void* st, const char* why);
+	void freeState(void* st);
 	Env& env() { return m_env; }
 	Labels& labels() { return m_labels; }
 	Listing& listing() { return m_listing; }
@@ -332,7 +361,10 @@ private:
 	void armCell(int type, int abs, unsigned char flags);
 
 	// one core instruction plus the bookkeeping that must follow it
-	long long execOne();
+	long long execOne(bool intDue);
+	// after the core's state was replaced wholesale: what the core does not
+	// carry has to agree with it again
+	void afterStateLoad(const char* why);
 	Computer* m_comp = nullptr;
 	CPU* m_timingCpu = nullptr;	// sandbox for instrTiming(), created on demand
 	Env m_env;
@@ -352,6 +384,10 @@ private:
 	// not there) belong to that machine, and each switch starts from this.
 	std::string m_envNote;
 	long m_driveGeom[4] = {0, 0, 0, 0};	// trklen a mounted image needs; 0 = DD
+	fdc::Monitor m_fdc;
+	fdc::Faults m_faults;
+	struct Held;			// a checkpoint with its xstate
+	std::map<std::string, std::shared_ptr<Held>> m_checkpoints;
 };
 
 // number parsing shared by the tools: 4660, "0x1234", "$1234", "#1234", "%1010"

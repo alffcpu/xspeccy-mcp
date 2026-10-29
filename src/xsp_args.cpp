@@ -77,6 +77,8 @@ bool argAddr(const json& a, const char* key, int& out) {
 	int n = 0;
 	if (xsp::parseNumber(s, n)) { out = n; return true; }
 	if (mach().labels().find(s, n)) { out = n; return true; }
+	// the TR-DOS ROM's entry points, which no symbol file of the program has
+	if (xsp::fdc::trdosFind(s, n)) { out = n; return true; }
 	throw std::runtime_error("no such label '" + s + "' (" + key + " takes a number, $hex or a "
 				 "label name; " + (mach().labels().size()
 					? std::to_string(mach().labels().size()) + " labels loaded from " +
@@ -334,6 +336,7 @@ json runToJson(const xsp::RunResult& r) {
 		j["break_type"] = r.brk_type;
 		j["break_address"] = r.brk_addr;
 	}
+	if (r.reason == "fdc") j["fdc_event"] = r.fdc;
 	// Where the beam stood when this stopped. Raster code is debugged by asking
 	// exactly this after every stop, and carrying it here saves the second call.
 	if (r.beam_line >= 0) {

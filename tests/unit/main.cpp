@@ -6,6 +6,7 @@ int main() {
 	test_args();
 	test_blend();
 	test_labels();
+	test_fdc();
 	test_listing();
 	test_keyboard();
 	test_platform();

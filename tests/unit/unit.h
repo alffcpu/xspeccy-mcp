@@ -88,6 +88,7 @@ void test_args();
 void test_audio();
 void test_blend();
 void test_builtin();
+void test_fdc();
 void test_config();
 void test_gif();
 void test_keyboard();

@@ -1,6 +1,6 @@
 # Tool reference
 
-All 54 tools the server exposes. Arguments marked **bold** are required; everything else has
+All 61 tools the server exposes. Arguments marked **bold** are required; everything else has
 a default. Numeric arguments accept a number or a string in any of the usual notations:
 `32768`, `"0x8000"`, `"$8000"`, `"#8000"`, `"%1000000000000000"`.
 
@@ -14,6 +14,11 @@ coverage       {"action": "read", "from": "draw_start", "to": "draw_end"}
 profile        {"action": "start", "ranges": [
                   {"tag": "pack", "start": "pack_attrs", "end": "im2_init"}]}
 ```
+
+The TR-DOS ROM's entry points have names of their own that need no symbol file:
+`trdos.read_bytes` (`#3FE5`), `trdos.write_bytes` (`#3FCA`), `trdos.out_c` (`#2A53`),
+`trdos.ret` (`#3D2F`), `trdos.call` (`#3D13`) and the rest listed under
+[Disk controller](#disk-controller-tr-dos).
 
 A string that is neither a number nor a known label is an **error**, never a silent zero:
 `no such label 'pack_atrs' (start takes a number, $hex or a label name; 158 labels loaded
@@ -79,8 +84,8 @@ land on the RAM trampoline at `$5B00` that only the boot writes - cold RAM makes
 | `step_over` | - | One instruction, but `CALL`/`RST`/block instructions run to completion. |
 | `step_out` | - | Run until the current subroutine returns. |
 
-Every one of these returns a stop `reason`: `steps`, `breakpoint`, `pc`, `frames`, `budget`
-or `return`, along with the new `pc`, the instruction count, and both `ns` and **`t_states`**.
+Every one of these returns a stop `reason`: `steps`, `breakpoint`, `pc`, `frames`, `budget`,
+`return`, or `fdc` with the disk controller's event in `fdc_event` (see `fdc_break`), along with the new `pc`, the instruction count, and both `ns` and **`t_states`**.
 Take the T-states: they are the exact count the cpu charged, contention waits included;
 `ns` is derived from them for convenience and cannot be converted back exactly.
 `run {"stop_pc": "main_loop"}` therefore measures a precalculation in one call, with no
@@ -168,7 +173,7 @@ memory the real cost depends on where the beam is.
 |---|---|---|
 | `set_breakpoint` | **`address`**, `access`, `scope` | Break on `exec` (default), `read`, `write`, or a combination like `"read,write"`. |
 | `set_port_breakpoint` | **`port`**, `access` | Break on an I/O port read or write. A port up to `$FF` matches on the low byte whatever is on the high one, so `$FE` catches `out ($FE),a` with any A; a 16-bit port above `$FF` (`$7FFD`) matches exactly. The reply's `match` says which. |
-| `clear_breakpoints` | - | Remove everything this server armed, memory and I/O alike. |
+| `clear_breakpoints` | - | Remove everything this server armed, memory and I/O alike, and the disk controller's `fdc_break` stops. |
 
 ### Which bank the breakpoint lands in
 
@@ -714,12 +719,171 @@ The 48K ROM starts in keyword-entry mode, so `PRINT` is one keypress (`p`), not 
 | Tool | Arguments | What it does |
 |---|---|---|
 | `load_file` | **`path`**, `drive` | Load by extension: `.sna`/`.z80` snapshots, `.spg` (TSConf/Profi), `.tap`/`.tzx`/`.wav` tapes, `.trd`/`.scl`/`.udi`/`.fdi`/`.td0`/`.dsk`/`.ima` disks, `.bin` raw. Snapshots start running immediately. `.bin` is the legacy BK format - a little-endian address/length header, payload written to RAM at the even addresses - and stays on whatever machine is running. Every format's declared structure is validated before the core sees it - `.spg`, `.td0`, `.dsk`, `.fdi`, `.udi`, `.trd`, `.scl`, `.tap`, `.tzx`, `.sna`, `.z80`, `.ima` - a truncated or miscounted file is refused, never half-loaded, and the machine is not switched for a file that cannot load (the core's own parsers would hang on, overflow, or fabricate them). A `.tzx` is also played through in the validator the way the core will expand it, loops and calls included, and refused past 2^26 pulses (the core keeps every pulse, 8 bytes each). An extended `.dsk` sector shorter than its size code loads with the rest of the sector zeroed and its CRC rewritten - copy-protected disks have them - instead of carrying the previous sector's bytes. A refused load leaves the session as it was: memory, registers, machine and mounted disks. `.ima` needs HD-density tracks: the adapter enables them on the drive before loading, and any other image puts the drive back to DD. When the format names a machine the current one cannot run (an `.spg` wants TSConf, a `.trd` wants a Beta Disk, a `.dsk` wants a +3), the machine switches first and the reply's `machine`/`model` say where it landed - the way upstream's `filemachine` picks. |
-| `save_snapshot` | **`path`** | Save the current state as `.sna`. |
+| `save_snapshot` | **`path`** | Save the current state as `.sna`. A `.sna` has no room for the disk controller or the angle of the disk: saved while a command runs, the reply carries a `warning` - use `checkpoint` for that. |
 | `tape` | `action`, `block` | `state`, `play`, `stop`, `rewind`, `next`, `eject`, `blocks`. Loading a tape does not press play. |
-| `disk` | `action`, `drive`, `path` | `state`, `insert`, `eject`, `save`. Drive 0 is A. `state` also reports the controller the machine has, and each drive's `track_bytes` (6250 for DD, 17700 once an `.ima` made it HD). `eject` returns the drive to DD. |
+| `disk` | `action`, `drive`, `path`, `angle_deg`, `rpm_percent`, `spinup_ms`, `write_protect` | `state`, `insert`, `eject`, `save`, `setup`. Drive 0 is A. `state` also reports the controller the machine has, and each drive's `track_bytes` (6250 for DD, 17700 once an `.ima` made it HD), the angle of the disk, and the drive setup when it differs from a plain drive. `eject` returns the drive to DD. `setup` turns the disk (`angle_deg`, where the next command starts), makes the drive faster or slower (`rpm_percent`, -10..10), delays a command while the motor comes up to speed (`spinup_ms`, 0..1000), and sets `write_protect`. `save` warns when `disk_track` faults are on the disk: they are bytes on its tracks and go into the file. |
 | `disk_catalog` | `drive` | The TR-DOS catalogue of the inserted disk: names, extensions, start address, length, track and sector. |
 | `sdcard` | `action`, `path` | `state`, `mount`, `eject`, `lock`, `unlock`. The raw sector-addressed card image the TSConf/ZX-Evo, ATM or Profi SD controller sees; mount it before boot. Images larger than 1 GiB are refused - the core's capacity math is 32-bit and cannot survive them; exactly 1 GiB is fine. Mounting or ejecting resets the controller, so a swapped card powers up uninitialized like a real one - including its lock: a card mounted after a locked one starts unlocked. |
 
 Inserting an image does not boot it: `reset {"mode": "dos"}` puts the machine in TR-DOS, and
 from the `A>` prompt the disk is readable. `disk_catalog` reads the image directly and works
 without any of that.
+
+---
+
+## Disk controller (TR-DOS)
+
+The Beta Disk interface's WD1793 (KR1818VG93 on the clones), for debugging and tuning code
+that drives it - a track loader, a fast reader, anything that calls the TR-DOS ROM from RAM.
+The tools answer on a machine with a Beta Disk; on a +3 (uPD765) or a machine with no disk
+they say so.
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `fdc_state` | `trdos` | The controller now, read without side effects: registers, status decoded for the command class, INTRQ/DRQ, the running command and its phase (`find_id`, `find_data`, `transfer`...), bytes left, the lost-data bit; the selected drive (head cylinder against the track register, side, motor, protect); the disk under the head - position, angle, what field and sector the head is over, and `next_ids`: in how many T-states each sector's ID comes round. `trdos: true` adds TR-DOS's system variables. |
+| `fdc_log` | `action`, `count`, `since` | The journal, always on, last 1024 rows. `read` (default): a row per command and its sectors, rows for `#FF` writes, rows for commands the controller ignored. `summary`: totals since `clear`. `clear`. |
+| `fdc_break` | `on`, `command`, `id`, `clear` | Stop `run`, `run_frames`, `run_to_beam`, `step_over`, `step_out` on a controller event. `on`: `command`, `end`, `error`, `lost_data`, `crc_error`, `not_found`, `index`, `interrupt_in_transfer`. `command`: only that command (`"read_sector"` or `"$80"`). `id`: `{cylinder, side, sector}` stops when that ID passes the head. Armed until `clear` or `clear_breakpoints`. |
+| `fdc_sweep` | **`stop_pc`**, `angles`, `max_frames`, `verify` | The same stretch from the current state at N evenly spaced disk angles (default 8): time, frames, sectors read and broken, revolutions, and with `verify` whether memory matches the disk. Puts the machine back afterwards. |
+| `disk_track` | `action`, `drive`, `cylinder`, `side`, `sector`, `kind` | The physical layout of one side of a cylinder: sectors in the order they pass the head, byte offsets of ID and data, size, mark, both CRCs, the order as a string, where the head is, T per byte and per revolution. `fault` puts a fault on a sector, `clear_faults` takes them all off. |
+| `disk_sector` | **`action`**, `drive`, `cylinder`, `side`, `sector`, `count`, `hex`, `address`, `length`, `file` | The image, bypassing the controller: `read` (hex, up to 16 sectors), `write` (CRC recomputed), `verify` memory against the disk in TR-DOS order from a sector or from a catalogue file. |
+| `checkpoint` | **`action`**, `name` | `save`, `load`, `list`, `drop`: the whole machine in this server's memory, the controller mid-command and the angle of the disk included. |
+
+### What the journal knows, and how
+
+The core keeps every fact the controller has - registers, the step of the command it runs,
+the head's place in the track to the byte - but no history. The server looks at it around
+every instruction and writes down what changed. When the controller stands still and the
+TR-DOS ROM is paged out nothing can change (its ports are not even decoded then), and the
+check costs nothing worth measuring: a run with no disk activity was as fast as 1.4.1 within
+the noise, and one that reads the disk continuously ran about 3.5% slower.
+
+A command row:
+
+```jsonc
+{"n": 16, "t": 11885821, "frame": 165, "frame_t": 62243,
+ "pc_hex": "$2A53", "pc_name": "trdos.out_c",          // the OUT that wrote the command
+ "cmd": "read_sector", "value_hex": "$80", "drive": 0, "side": 0,
+ "track": 0, "sector": 14,                              // the registers as the program set them
+ "head": 0,                                             // the cylinder the head is really on
+ "disk_pos": 3875,                                      // where on the track (bytes) it started
+ "duration_t": 87039, "status_hex": "$04", "status": ["lost_data"], "end": "done",
+ "sectors": [{"id": [0, 0, 14, 1], "found_t": 52409, "data_t": 58012, "bytes": 256,
+              "lost": 10, "first_lost": 205, "interrupts": 1, "isr_max_t": 1120}]}
+```
+
+- `found_t` is when the ID came round, counted from the command; `data_t` the first data byte.
+  The difference between the two is the gap the format leaves; `found_t` is the rotational
+  wait a loader can win back by reading sectors in the order they arrive.
+- **A lost byte** is one the controller replaced while the last was still waiting in the data
+  register: DRQ was up before the instruction, the instruction did not touch `#7F`, and a new
+  byte arrived. `first_lost` is the offset of the byte that was overwritten - the first byte of
+  the sector that is wrong in memory. `bytes` minus `lost` is what the CPU took, and the
+  summary's `data_port + lost = delivered` holds to the byte.
+- `interrupts` and `isr_max_t`: interrupts accepted while this sector was being transferred,
+  and how long the longest handler ran (from acceptance until the interrupted PC came back with
+  the same SP). Set against `byte_window_t` in the summary - 112 T at 3.5 MHz, the time a byte
+  waits - a handler of 1120 T costs ten bytes, every time it lands on a transfer.
+- `end`: `done`, `forced` (a `$D0`-`$DF` stopped it), `reset`, `checkpoint`. A restore the
+  reset itself starts has no `pc_hex`.
+- `ignored` rows: a command written while the controller was busy (`why: "busy"`) or held in
+  reset (`"reset"`) - the WD1793 drops those silently.
+- `turbo: true` on a row means the `fdcturbo` setting was on; the controller then moves many
+  bytes per instruction and the counts are approximate.
+
+`fdc_log {"action": "summary"}`:
+
+```jsonc
+{"commands": 17, "by_kind": {"read_sector": 16, "restore": 1},
+ "sectors": 16, "sectors_ok": 10, "sectors_lost_data": 6, "crc_errors": 0, "not_found": 0,
+ "revolutions": 1,
+ "t": {"busy": 1390682, "find_id": 836538, "seek": 67, "transfer": 458932},
+ "bytes": {"delivered": 4096, "lost": 59, "data_port": 4037, "status_polls": 41847},
+ "interrupts": {"during_commands": 19, "during_transfer": 6, "sectors_hit": 6,
+                "longest_handler_t": 1120, "byte_window_t": 112},
+ "throughput": {"span_t": 1395300, "bytes_ok": 2560, "bytes_per_s": 6422,
+                "ceiling_bytes_per_s": 20480}}
+```
+
+`ceiling_bytes_per_s` is the data on the track under the head divided by one revolution - what
+a reader that never waits and never loses a sector would get from that side.
+
+### The angle of the disk, and why `fdc_sweep` exists
+
+In the core the disk turns only while the controller runs a command (and for the 15
+revolutions the motor coasts after it); between commands it stands still. Its angle is a byte
+position on the track, `fdc_state`'s `disk.position`, and it decides when each sector arrives
+relative to the interrupts. An emulator starts every run at the same angle, so a loader that
+meets its sectors badly at one angle and well at another always shows the same one; on the
+real machine the angle is whatever it is. `disk {"action": "setup", "angle_deg": 90}` sets it
+by hand, and `fdc_sweep` runs the same stretch at every angle:
+
+```jsonc
+fdc_sweep {"stop_pc": "loaded", "angles": 8}
+→ {"summary": {"runs": 8, "reached": 8, "failed": 0, "t_min": 666587, "t_max": 1279113,
+               "t_mean": 972865, "best_angle_deg": 45.0, "worst_angle_deg": 90.0,
+               "spread_frames": 8.5},
+   "runs": [{"angle_deg": 0.0, "reached": true, "t": 754079, "frames": 11, "commands": 8,
+             "sectors_ok": 5, "sectors_lost_data": 3, "revolutions": 1}, ...]}
+```
+
+`verify: {"address": "$6000", "file": "PART2.C"}` (or a `cylinder`/`side`/`sector` and a
+`length`) adds a comparison of memory with the disk after each run: `"verify": "ok"`, or the
+first byte that differs.
+
+The machine is put back where it was; profile, trace, coverage, `beam_log`, the journal and
+the `fdc_break` stops are untouched. Breakpoints still stop a run, and the run says so in
+`stopped`.
+
+### Faults and a different drive
+
+`disk_track {"action": "fault", "cylinder": 0, "side": 0, "sector": 5, "kind": ...}`:
+`crc_data` (the data CRC is wrong: the read ends with CRC error), `crc_id` (the ID's CRC),
+`no_id` (the ID mark is gone: five revolutions, then not found), `no_data` (the ID is there,
+the data mark is not: not found), `deleted` (an `$F8` mark with a correct CRC: the status
+carries the deleted-mark bit). Each track is kept as it was before its first fault and
+`clear_faults` puts it back byte for byte. A fault is a change to the disk's bytes: `disk save`
+writes it into the file and says so.
+
+`disk setup`'s `rpm_percent` scales the time of one byte, which on a drive is the same thing
+as its speed: data and rotation both. `spinup_ms` holds the command when the motor comes on.
+There is no byte-level jitter: the controller moves the disk a whole byte at a time, and when
+sectors arrive against the interrupts - the thing a loader can get wrong - is what the angle
+and the speed already cover.
+
+### `checkpoint` against `.sna`
+
+A `.sna` holds memory and the CPU; it has no room for a command in progress, a head position
+or the angle of the disk, so a snapshot taken during a load comes back with the controller
+reset and the loader waiting for an interrupt that never arrives. `checkpoint` takes the
+whole machine as the core sees it, and a load resumes the command to the T-state. The price
+is that it lives in this server process only: the state holds pointers into the core's own
+tables, which the next run of the server has at other addresses, so it cannot be a file. The
+contents of the disk are not in it either; loading on a drive that now holds another image
+says so, and a checkpoint taken on another machine (model, definition or memory) is refused.
+
+### The TR-DOS ROM by name
+
+`disassemble` names these while the TR-DOS ROM is paged in (the address decides nothing: the
+48K ROM's `#3FE5` is the font), and every address argument takes the name. Each is checked
+against the bytes of the ROM before it is given; a TR-DOS that has other code there gets no
+name rather than a wrong one. Checked against 5.03 and 5.04T.
+
+| Name | Address | What is there |
+|---|---|---|
+| `trdos.read_sectors` | `#1E3D` | body of `#3D13` function 5: read B sectors from D track, E sector to HL |
+| `trdos.read_sector` | `#2090` | `di`, `ld a,#80`, `out (#1F),a`: one sector by table entry, with retries |
+| `trdos.read_sector_cmd` | `#2093` | `out (#1F),a` with the command in A, then the bytes through `#3FE5` |
+| `trdos.out_c` | `#2A53` | `out (c),a : ret` - a port write from RAM |
+| `trdos.entry` | `#3D00` | `RANDOMIZE USR 15616` |
+| `trdos.command` | `#3D03` | `RANDOMIZE USR 15619`: one command from BASIC |
+| `trdos.call` | `#3D13` | run TR-DOS function C |
+| `trdos.init` | `#3D21` | prepare TR-DOS and its variables |
+| `trdos.ret` | `#3D2F` | `nop : ret` - jump here from RAM with a ROM address on the stack |
+| `trdos.write_bytes` | `#3FCA` | wait for DRQ/INTRQ on `#FF`, `outi` to `#7F` until INTRQ |
+| `trdos.read_bytes` | `#3FE5` | wait for DRQ/INTRQ on `#FF`, `ini` from `#7F` until INTRQ |
+
+`fdc_state {"trdos": true}` decodes the system variables two independent references agree
+on: `drive_modes` (`#5CC8`), `bad_sectors` (`#5CD6`), `file_descriptor` (`#5CDD`), `sector` and
+`track` (`#5CF4`/`#5CF5`), `temp_drive`, `step_rates`, `last_command`, `sector_arg`, `buffer`,
+`mode`, `error` and `error_hi` (`#5D0F`/`#5D10`), `sys_copy` (`#5D16`, the last `#FF` value),
+`default_drive` (`#5D19`).
